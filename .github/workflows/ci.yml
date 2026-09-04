@@ -15,7 +15,15 @@ jobs:
       - name: Install toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build cmake g++
+          sudo apt-get install -y ninja-build cmake g++ can-utils iproute2
+
+      # Without a real vcan interface the CanSource tests skip rather than fail,
+      # so CI would stay green while the only Linux-specific ingest path in the
+      # project went untested.
+      - name: Bring up vcan0
+        run: |
+          sudo apt-get install -y "linux-modules-extra-$(uname -r)"
+          ./scripts/setup-vcan.sh 1
 
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DETG_WERROR=ON
@@ -24,7 +32,7 @@ jobs:
         run: cmake --build build
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure --no-tests=error
 
       - name: Smoke
         run: ./build/src/etg-gateway

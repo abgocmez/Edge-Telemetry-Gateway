@@ -11,6 +11,7 @@ FetchContent_MakeAvailable(Catch2)
 add_executable(etg_tests
   test_version.cpp
   test_wire.cpp
+  test_source.cpp
 )
 target_link_libraries(etg_tests PRIVATE etg_core etg_warnings Catch2::Catch2WithMain)
 
