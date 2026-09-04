@@ -42,10 +42,15 @@ Durability, WAL, replication. Kubernetes. TLS/auth. Web UI. Exactly-once.
 
 Ordered so each is independently shippable. The cut line can land anywhere.
 
-- **M1 — visibly runs.** vcan0, own paced load generator (not cangen), one source thread,
-  **plain mutex + condvar bounded queue**, TCP egress, probe printing frames/sec.
-  CMake + Ninja, docker compose up, CI build + smoke test.
-  The mutex queue is deliberate: it de-risks M2 and yields a free mutex-vs-lockfree comparison.
+- **M1 — visibly runs.** vcan0, own timerfd-paced generator as a separate process publishing its
+  own pacing jitter histogram. One source thread. **Two per-consumer mutex + condvar bounded queues**
+  (probe + recorder), fan-out thread copies into both. TCP egress. CMake + Ninja, docker compose up,
+  CI build + smoke test.
+  This is topology A (N copies, locks) in full — a complete, defensible alternative to M2 topology B
+  (1 copy, lock-free broadcast), not a stub. If M2 fails, M1 still stands as an architecture, and M4
+  compares the two designs rather than just mutex-vs-atomics.
+  The M1 recorder is deliberately dumb: append and count. No rotation, no gap records, no fsync
+  policy — all of that is M3.
 - **M2 — the ring.** Multi-bus, M source threads. Broadcast ring behind M1's interface.
   TSan in CI. Deliberately-broken relaxed-instead-of-release variant. Randomized stress on
   x86_64 and aarch64. Padded vs unpadded throughput.
@@ -57,6 +62,71 @@ Ordered so each is independently shippable. The cut line can land anywhere.
   Committed scripts, stated method, stated limitations.
 - **M5 — stretches, in order.** SCHED_FIFO/isolcpus comparison, thermal trace,
   LIN/HID source, bounded replay. Stop when time runs out.
+
+## M1 design decisions
+
+### Source abstraction boundary
+
+The gateway owns the threads; a source is an fd plus a batch drain.
+
+- `fd()` for epoll/poll, `drain(out, max)` for a non-blocking batch read, `id()` for per-source
+  FIFO and per-source stats, plus counters (frames, kernel drops via SO_RXQ_OVFL, errors).
+- Chosen because it is not an invented abstraction: a CAN raw socket, hidraw for the LIN hardware,
+  and a timerfd-driven synthetic generator are all genuinely fds.
+- Decouples threading topology from source implementations: thread-per-source vs one epoll thread
+  over all sources becomes a swap, and a measurable comparison in M4 on 4 Pi cores.
+- Solves ingest shutdown cleanly: an eventfd in the epoll set wakes everything.
+- Batch reads stay inside the source, because recvmmsg is CAN-socket specific and hidraw has no
+  equivalent.
+- **Virtual, not templated.** One virtual call per batch, not per frame; at batch 64 the vtable cost
+  is below measurement noise. CRTP would force everything into headers for no measurable gain.
+- Timestamping happens inside the source — earliest point in our own code.
+
+### Record layout (40 bytes)
+
+| Field | Type | Bytes | Note |
+|---|---|---|---|
+| `seq` | u64 | 8 | Global sequence, assigned at ring-claim time, not by the source |
+| `t_kernel` | u64 | 8 | ns, **CLOCK_REALTIME** (SO_TIMESTAMPING is realtime-based) |
+| `t_ingest` | u64 | 8 | ns, **CLOCK_MONOTONIC**, taken in the source |
+| `can_id` | u32 | 4 | 29-bit extended included |
+| `src_id` | u8 | 1 | Which bus — per-source FIFO guarantee and per-source counters |
+| `len` | u8 | 1 | |
+| `flags` | u8 | 1 | EFF / RTR / ERR |
+| `_pad` | u8 | 1 | Explicit, never left to the compiler |
+| `data` | u8[8] | 8 | Classic CAN only |
+
+With the cell's 8-byte seqlock counter this is 48 bytes, padding to 64: **one cell per cache line.**
+
+Two distinct things both called sequence — do not conflate:
+- **Cell seqlock counter** = protocol. `pos*2 + phase`, odd/even carries write state. Never on the wire.
+- **Record `seq` field** = data. `pos`. Goes on the wire; this is what produces gap markers.
+
+CAN FD is out of scope. A 64-byte payload would push the record to 88 and break the cache line
+alignment. Adding it later is the live demonstration of what the wire version byte is for.
+
+### Clock strategy
+
+- Per-frame timestamps stay **CLOCK_MONOTONIC** — local single-domain discipline preserved.
+- The gateway publishes a **(monotonic, realtime) pair once per second** on the stats channel.
+  Consumers convert as needed. Cost is 16 bytes per second, not per frame.
+- This one mechanism solves both cross-domain problems: cross-machine latency (chrony disciplines
+  CLOCK_REALTIME, never CLOCK_MONOTONIC) and the kernel-to-userspace delta (SO_TIMESTAMPING is
+  realtime-based). Inter-sample drift is ppm, i.e. nanoseconds — negligible.
+- **Cross-machine latency method: chrony.** Local path keeps genuine one-way CLOCK_MONOTONIC.
+  Always state which method produced which number; never mix them in one plot.
+- Mandatory for chrony to be defensible:
+  - **Disable `makestep` during measurement runs.** A step mid-run silently corrupts the numbers.
+    Slew only.
+  - **Log `chronyc tracking` alongside every run** — offset and RMS jitter reported as an error bar.
+  - Low-rate (1 Hz) consumer echo for an **RTT/2 cross-check**. Not a second method; a validator.
+    If chrony and RTT/2 disagree by more than the stated error bar, the sync is bad and you know it.
+- Known methodological weakness, state it: **the offered load degrades the clock sync it depends on.**
+  Under a throughput test the USB-attached NIC saturates, chrony's own packets are delayed, and the
+  offset estimate worsens exactly during measurement. Tolerable while remote latency is milliseconds
+  and chrony error is ~100-200 us; not tolerable if remote latency approaches the error.
+- vcan limitation: the kernel timestamp is taken when the frame enters the virtual stack, i.e. when
+  the generator wrote it. This measures the loopback path, not a real controller RX path.
 
 ## Risks
 
