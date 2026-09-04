@@ -1,0 +1,53 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake g++
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DETG_WERROR=ON
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Smoke
+        run: ./build/src/etg-gateway
+
+  # Verifies on day one that the runner can provide a real vcan interface, rather
+  # than discovering it at step 3. If this job ever fails, CanSource loses its CI
+  # coverage and the risk moves to the Pi.
+  vcan-available:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install can-utils
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y can-utils iproute2
+
+      - name: Bring up vcan0..vcan3
+        run: ./scripts/setup-vcan.sh 4
+
+      - name: Prove a frame round-trips through the kernel
+        run: |
+          timeout 5 candump -n 1 vcan0 &
+          sleep 1
+          cansend vcan0 123#DEADBEEF
+          wait %1
