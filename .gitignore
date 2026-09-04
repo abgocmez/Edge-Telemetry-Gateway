@@ -1,0 +1,35 @@
+# Build
+build/
+build-*/
+cmake-build-*/
+CMakeUserPresets.json
+compile_commands.json
+.cache/
+
+# Objects / binaries
+*.o
+*.a
+*.so
+*.so.*
+
+# Profiling
+perf.data
+perf.data.old
+*.gcda
+*.gcno
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local tooling
+ruvector.db
+
+# Scoping prompt: contains personal career context. Technical content lives in SCOPE.md.
+# Remove this line if you decide to track it.
+claude.md
