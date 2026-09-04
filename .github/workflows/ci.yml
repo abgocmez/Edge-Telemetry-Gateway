@@ -37,10 +37,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install can-utils
+      - name: Install can-utils and the vcan module
         run: |
           sudo apt-get update
           sudo apt-get install -y can-utils iproute2
+          # The Azure kernel on GitHub runners does not ship vcan; it lives in
+          # linux-modules-extra for the running kernel.
+          sudo apt-get install -y "linux-modules-extra-$(uname -r)"
+          uname -r
+          find /lib/modules -name 'vcan*'
 
       - name: Bring up vcan0..vcan3
         run: ./scripts/setup-vcan.sh 4
