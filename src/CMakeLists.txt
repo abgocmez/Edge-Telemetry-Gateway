@@ -1,5 +1,6 @@
 add_library(etg_core STATIC
   version.cpp
+  wire.cpp
 )
 target_include_directories(etg_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(etg_core PRIVATE etg_warnings PUBLIC etg_sanitizers)
