@@ -40,6 +40,21 @@ class ProtocolError(Exception):
     pass
 
 
+class TruncatedTail(Exception):
+    """The file ends part-way through a message.
+
+    Not the same thing as a malformed file. A capture read while the recorder is
+    still appending legitimately ends mid-message, because the writer's buffer
+    has not been flushed yet. Treating that as corruption would make any live
+    read a false alarm, so it is reported separately and --strict decides
+    whether it is fatal.
+    """
+
+    def __init__(self, nbytes):
+        super().__init__(f"{nbytes} trailing bytes")
+        self.nbytes = nbytes
+
+
 def parse_header(buf):
     magic, version, header_len, record_len, count, payload_len = HEADER.unpack(buf)
     if magic != MAGIC:
@@ -84,11 +99,11 @@ def read_capture(path):
             if not head:
                 return
             if len(head) != HEADER_SIZE:
-                raise ProtocolError(f"truncated header: {len(head)} bytes")
+                raise TruncatedTail(len(head))
             count, payload_len = parse_header(head)
             payload = f.read(payload_len)
             if len(payload) != payload_len:
-                raise ProtocolError(f"truncated payload: {len(payload)} of {payload_len}")
+                raise TruncatedTail(HEADER_SIZE + len(payload))
             for i in range(count):
                 yield parse_record(payload[i * RECORD_SIZE:(i + 1) * RECORD_SIZE])
 
@@ -98,6 +113,8 @@ def main():
     ap.add_argument("path")
     ap.add_argument("--json", action="store_true", help="one JSON object per frame")
     ap.add_argument("--limit", type=int, default=0, help="stop after N frames")
+    ap.add_argument("--strict", action="store_true",
+                    help="fail on a truncated tail; use when the writer has stopped")
     args = ap.parse_args()
 
     frames = 0
@@ -106,6 +123,7 @@ def main():
     missing = 0
     last_seq = None
     per_source = {}
+    tail = 0
 
     try:
         for rec in read_capture(args.path):
@@ -121,6 +139,8 @@ def main():
             last_seq = rec["seq"]
             if args.limit and frames >= args.limit:
                 break
+    except TruncatedTail as exc:
+        tail = exc.nbytes
     except ProtocolError as exc:
         print(f"protocol error after {frames} frames: {exc}", file=sys.stderr)
         return 1
@@ -131,6 +151,12 @@ def main():
         print(f"sources     {dict(sorted(per_source.items()))}")
         print(f"gaps        {gaps}")
         print(f"missing     {missing}")
+        if tail:
+            print(f"tail        {tail} trailing bytes (writer still appending?)")
+
+    if tail and args.strict:
+        print(f"truncated tail of {tail} bytes with --strict", file=sys.stderr)
+        return 1
     return 0
 
 

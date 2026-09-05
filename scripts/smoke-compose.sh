@@ -57,12 +57,19 @@ echo
 echo "--- probe ---"
 docker compose logs --no-log-prefix --tail 4 probe
 
+# Stop the recorder before reading its file. It buffers, so a capture read from
+# under a running writer ends mid-message - which is legitimate, but it means
+# the file cannot be checked for completeness. SIGTERM makes it flush and close.
+echo
+echo "--- stopping the recorder so its capture is complete ---"
+docker compose stop recorder
+
 echo
 echo "--- capture, parsed from the spec inside the container ---"
 # Parsed in a container that mounts the same volume, so the check runs against
 # the bytes the recorder actually wrote rather than a copy.
 parsed=$(docker compose run --rm --entrypoint "" -v etg-data:/data recorder \
-  python3 /usr/local/bin/parse-capture.py /data/capture.etg)
+  python3 /usr/local/bin/parse-capture.py --strict /data/capture.etg)
 echo "$parsed"
 
 frames=$(echo "$parsed" | sed -n 's/^frames  *\([0-9][0-9]*\).*/\1/p')
