@@ -237,3 +237,101 @@ TEST_CASE("egress starts disconnected and stop is idempotent", "[egress]") {
 
   CHECK(egress->stats().frames_sent == 0);
 }
+
+TEST_CASE("a consumer that falls behind is sent a gap marker", "[egress][gap]") {
+  // The point of wire version 2, end to end over a real socket.
+  //
+  // The queue is tiny and far more is pushed than fits, so the consumer is
+  // overwritten. What it receives is not merely a jump in sequence numbers: the
+  // gateway prepends a marker naming exactly where the loss began and how much
+  // of it there was.
+  QueueFeed feed{16};
+  std::string error;
+  auto egress = Egress::create("test", feed, 0, error);
+  REQUIRE(egress != nullptr);
+  egress->start();
+
+  auto stream = FrameStream::connect("127.0.0.1", egress->port(), error);
+  REQUIRE(stream != nullptr);
+
+  // A first batch that fits, so the egress learns where this consumer is.
+  std::vector<Frame> first;
+  for (std::uint64_t i = 0; i < 4; ++i) {
+    first.push_back(make_frame(i));
+  }
+  static_cast<void>(feed.queue().push_batch(std::span<const Frame>{first}));
+
+  std::vector<Frame> got;
+  std::vector<Frame> batch;
+  auto pump = [&](std::chrono::milliseconds budget) {
+    const auto until = std::chrono::steady_clock::now() + budget;
+    while (std::chrono::steady_clock::now() < until) {
+      const FrameStream::Status st = stream->read_batch(batch, 50);
+      if (st == FrameStream::Status::kClosed || st == FrameStream::Status::kProtocolError) {
+        return;
+      }
+      got.insert(got.end(), batch.begin(), batch.end());
+    }
+  };
+  pump(1s);
+  REQUIRE(got.size() >= 4);
+  const std::uint64_t before = got.size();
+
+  // Now overwhelm it: 500 frames into 16 slots.
+  std::vector<Frame> flood;
+  for (std::uint64_t i = 4; i < 504; ++i) {
+    flood.push_back(make_frame(i));
+  }
+  static_cast<void>(feed.queue().push_batch(std::span<const Frame>{flood}));
+  pump(2s);
+  egress->stop();
+
+  REQUIRE(got.size() > before);
+
+  std::size_t markers = 0;
+  std::uint64_t reported = 0;
+  for (std::size_t i = before; i < got.size(); ++i) {
+    if (wire::is_gap(got[i])) {
+      ++markers;
+      reported += wire::gap_count(got[i]);
+      // The marker names where the stream resumes, so the next real frame must
+      // be exactly there.
+      REQUIRE(i + 1 < got.size());
+      CHECK(got[i + 1].seq == got[i].seq + wire::gap_count(got[i]));
+      CHECK(wire::gap_reason(got[i]) == GapReason::kConsumerOverrun);
+      CHECK(got[i].t_kernel_ns == 0);  // a marker was never on a bus
+    }
+  }
+
+  CHECK(markers >= 1);
+  CHECK(reported > 0);
+  CHECK(egress->stats().gaps_sent == markers);
+  CHECK(egress->stats().frames_lost == reported);
+}
+
+TEST_CASE("a consumer that keeps up is sent no markers at all", "[egress][gap]") {
+  QueueFeed feed{4096};
+  std::string error;
+  auto egress = Egress::create("test", feed, 0, error);
+  REQUIRE(egress != nullptr);
+  egress->start();
+
+  auto stream = FrameStream::connect("127.0.0.1", egress->port(), error);
+  REQUIRE(stream != nullptr);
+
+  std::vector<Frame> sent;
+  for (std::uint64_t i = 0; i < 300; ++i) {
+    sent.push_back(make_frame(i));
+  }
+  static_cast<void>(feed.queue().push_batch(std::span<const Frame>{sent}));
+
+  const std::vector<Frame> got = collect(*stream, sent.size(), 5s);
+  egress->stop();
+
+  REQUIRE(got.size() == sent.size());
+  for (const Frame& f : got) {
+    CHECK_FALSE(wire::is_gap(f));
+  }
+  CHECK(egress->stats().gaps_sent == 0);
+  CHECK(egress->stats().frames_lost == 0);
+}

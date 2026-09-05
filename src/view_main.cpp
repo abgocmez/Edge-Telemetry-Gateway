@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "frame_stream.hpp"
+#include "gap_tracker.hpp"
 #include "http.hpp"
 #include "samples.hpp"
 #include "source.hpp"
@@ -130,13 +131,12 @@ struct State {
   bool connected = false;
   std::uint64_t frames = 0;
   std::uint64_t batches = 0;
-  std::uint64_t gaps = 0;
-  std::uint64_t missing = 0;
   std::uint64_t reconnects = 0;
   std::uint64_t protocol_errs = 0;
   std::uint64_t first_seq = 0;
   std::uint64_t last_seq = 0;
   bool have_seq = false;
+  etg::GapTracker gaps;
 
   std::map<std::uint32_t, IdStat> ids;
   std::deque<etg::Frame> recent;
@@ -171,14 +171,15 @@ std::string json_stats(State& st, std::uint16_t port) {
   char buf[512];
   std::snprintf(buf, sizeof(buf),
                 "{\"connected\":%s,\"port\":%u,\"uptime_s\":%.1f,"
-                "\"frames\":%llu,\"batches\":%llu,\"gaps\":%llu,\"missing\":%llu,"
+                "\"frames\":%llu,\"batches\":%llu,\"markers\":%llu,\"missing\":%llu,\"silent\":%llu,"
                 "\"reconnects\":%llu,\"protocol_errs\":%llu,"
                 "\"first_seq\":%llu,\"last_seq\":%llu,",
                 st.connected ? "true" : "false", port, uptime,
                 static_cast<unsigned long long>(st.frames),
                 static_cast<unsigned long long>(st.batches),
-                static_cast<unsigned long long>(st.gaps),
-                static_cast<unsigned long long>(st.missing),
+                static_cast<unsigned long long>(st.gaps.stats().markers),
+                static_cast<unsigned long long>(st.gaps.total_lost()),
+                static_cast<unsigned long long>(st.gaps.stats().silent_jumps),
                 static_cast<unsigned long long>(st.reconnects),
                 static_cast<unsigned long long>(st.protocol_errs),
                 static_cast<unsigned long long>(st.first_seq),
@@ -329,7 +330,7 @@ footer{margin-top:22px;color:var(--muted);font-size:12px}
       <div class="value"><span id="k-rate">–</span><span class="unit">frames/s</span></div></div>
     <div class="card kpi"><div class="label">Frames</div>
       <div class="value" id="k-frames">–</div></div>
-    <div class="card kpi"><div class="label">Gaps</div>
+    <div class="card kpi"><div class="label">Loss markers</div>
       <div class="value" id="k-gaps">–</div></div>
     <div class="card kpi"><div class="label">Missing</div>
       <div class="value" id="k-missing">–</div></div>
@@ -465,12 +466,13 @@ async function tick(){
   $("meta").textContent =
     `port ${d.port} · up ${Math.round(d.uptime_s)} s · ${nf.format(d.batches)} batches` +
     (d.reconnects > 1 ? ` · ${d.reconnects} connections` : "") +
-    (d.protocol_errs ? ` · ${d.protocol_errs} protocol errors` : "");
+    (d.protocol_errs ? ` · ${d.protocol_errs} protocol errors` : "") +
+    (d.silent ? ` · ${d.silent} unreported jumps` : "");
 
   rate = d.rate;
   $("k-rate").textContent   = nf.format(rate[rate.length - 2] || 0);
   $("k-frames").textContent = nf.format(d.frames);
-  $("k-gaps").textContent   = nf.format(d.gaps);
+  $("k-gaps").textContent   = nf.format(d.markers);
   $("k-missing").textContent= nf.format(d.missing);
   $("k-ids").textContent    = nf.format(d.ids.length);
 
@@ -593,6 +595,7 @@ int main(int argc, char** argv) {
       std::lock_guard<std::mutex> lock(state.mutex);
       state.connected = true;
       ++state.reconnects;
+      state.gaps.reset();
     }
 
     while (g_stop == 0 && etg::monotonic_ns() < deadline) {
@@ -610,9 +613,10 @@ int main(int argc, char** argv) {
         } else if (st == etg::FrameStream::Status::kOk && !batch.empty()) {
           ++state.batches;
           for (const etg::Frame& f : batch) {
-            if (state.have_seq && f.seq != state.last_seq + 1) {
-              ++state.gaps;
-              state.missing += f.seq > state.last_seq ? (f.seq - state.last_seq - 1) : 0;
+            // Markers are loss reports, not frames: counting one as traffic
+            // would show a bus carrying data that never existed.
+            if (!state.gaps.observe(f)) {
+              continue;
             }
             if (!state.have_seq) {
               state.first_seq = f.seq;
@@ -665,10 +669,12 @@ int main(int argc, char** argv) {
   }
 
   server->stop();
-  std::fprintf(stderr, "\netg-view: frames=%llu gaps=%llu missing=%llu http_requests=%llu\n",
+  std::fprintf(stderr,
+               "\netg-view: frames=%llu markers=%llu lost=%llu silent=%llu http_requests=%llu\n",
                static_cast<unsigned long long>(state.frames),
-               static_cast<unsigned long long>(state.gaps),
-               static_cast<unsigned long long>(state.missing),
+               static_cast<unsigned long long>(state.gaps.stats().markers),
+               static_cast<unsigned long long>(state.gaps.total_lost()),
+               static_cast<unsigned long long>(state.gaps.stats().silent_jumps),
                static_cast<unsigned long long>(server->requests()));
   return 0;
 }

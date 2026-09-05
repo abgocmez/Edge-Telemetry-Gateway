@@ -16,7 +16,11 @@
 // that another language could implement it stops being true.
 namespace etg::wire {
 
-inline constexpr std::uint8_t  kVersion    = 1;
+// 2 because gap markers set a bit that version 1 required decoders to reject.
+// The alternative - quietly reusing a reserved bit - would have turned every
+// deployed v1 consumer into one that reads a loss marker as a CAN frame with a
+// nonsense identifier.
+inline constexpr std::uint8_t  kVersion    = 2;
 inline constexpr std::size_t   kHeaderSize = 16;
 inline constexpr std::size_t   kRecordSize = 40;
 inline constexpr std::uint32_t kMaxCount   = 65535;  // sanity bound on a decoded batch
@@ -54,6 +58,23 @@ enum class DecodeError : std::uint8_t {
 
 void encode_frame(const Frame& f, FrameBytes out) noexcept;
 [[nodiscard]] DecodeError decode_frame(ConstFrameBytes in, Frame& out) noexcept;
+
+// A marker occupies a record slot but is not a frame: `seq` names the first
+// sequence the consumer did not receive, and the payload carries how many are
+// missing. The next real frame therefore has sequence `seq + count`, which lets
+// a consumer close its books without having to guess.
+//
+// Emitted by the gateway rather than inferred by the consumer, because only the
+// gateway can say *why*. A consumer can see that sequences 100 to 149 never
+// arrived; it cannot tell whether it was too slow or whether the kernel dropped
+// them before they ever had a sequence at all - and those two facts call for
+// completely different responses.
+[[nodiscard]] Frame make_gap(std::uint64_t first_missing, std::uint64_t count, GapReason reason,
+                             std::uint64_t t_ingest_ns) noexcept;
+
+[[nodiscard]] bool is_gap(const Frame& f) noexcept;
+[[nodiscard]] std::uint64_t gap_count(const Frame& f) noexcept;
+[[nodiscard]] GapReason gap_reason(const Frame& f) noexcept;
 
 void encode_header(std::uint32_t count, HeaderBytes out) noexcept;
 [[nodiscard]] DecodeError decode_header(ConstHeaderBytes in, BatchHeader& out) noexcept;

@@ -43,7 +43,7 @@ constexpr std::array<std::uint8_t, wire::kRecordSize> kGoldenRecord{
 
 constexpr std::array<std::uint8_t, wire::kHeaderSize> kGoldenHeader{
     0x45, 0x54, 0x47, 0x31,  // "ETG1"
-    0x01,                    // version
+    0x02,                    // version: 2 since gap markers set a bit v1 rejected
     0x10,                    // header_len = 16
     0x28, 0x00,              // record_len = 40
     0x01, 0x00, 0x00, 0x00,  // count = 1
@@ -129,7 +129,7 @@ TEST_CASE("frame encode/decode round-trips over the edges of every field", "[wir
 TEST_CASE("a decoder rejects malformed records with a distinct reason", "[wire][errors]") {
   SECTION("a reserved flag bit is a version violation, not a warning") {
     auto bytes = as_bytes(kGoldenRecord);
-    bytes[30] = std::byte{0x08};  // bit 3, reserved in v1
+    bytes[30] = std::byte{0x10};  // bit 4, still reserved in v2
     Frame f{};
     CHECK(wire::decode_frame(wire::ConstFrameBytes{bytes}, f) ==
           wire::DecodeError::kReservedFlagSet);
@@ -155,7 +155,7 @@ TEST_CASE("a decoder rejects malformed headers with a distinct reason", "[wire][
 
   SECTION("unsupported version") {
     auto bytes = as_bytes(kGoldenHeader);
-    bytes[4] = std::byte{0x02};
+    bytes[4] = std::byte{0x03};
     CHECK(wire::decode_header(wire::ConstHeaderBytes{bytes}, h) ==
           wire::DecodeError::kUnsupportedVersion);
   }
@@ -187,4 +187,57 @@ TEST_CASE("every decode error has a distinct message", "[wire][errors]") {
   for (const auto e : all) {
     CHECK(std::string_view{wire::to_string(e)} != "unknown");
   }
+}
+
+// A gap marker is a wire feature, so it gets the same treatment as a frame: a
+// hand-written vector rather than whatever the encoder happens to produce.
+TEST_CASE("a gap marker encodes to exactly the golden bytes", "[wire][golden][gap]") {
+  constexpr std::array<std::uint8_t, wire::kRecordSize> kGoldenGap{
+      // seq = 100, the first sequence this consumer did not receive
+      0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      // t_kernel_ns = 0; a marker was never on a bus
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      // t_ingest_ns = 7'000
+      0x58, 0x1B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00,  // can_id = 0
+      0x00,  // src_id carries the reason, not a bus: 0 = consumer overrun
+      0x08,  // len
+      0x08,  // flags = kGap
+      0x00,  // reserved
+      // data = 50, the number of frames missing
+      0x32, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  };
+
+  const Frame gap = wire::make_gap(100, 50, GapReason::kConsumerOverrun, 7'000);
+
+  std::array<std::byte, wire::kRecordSize> buf{};
+  wire::encode_frame(gap, wire::FrameBytes{buf});
+  REQUIRE(buf == as_bytes(kGoldenGap));
+}
+
+TEST_CASE("a gap marker survives the round trip and reads back as loss",
+          "[wire][gap]") {
+  const Frame gap = wire::make_gap(1000, 42, GapReason::kIngestLoss, 12'345);
+
+  std::array<std::byte, wire::kRecordSize> buf{};
+  wire::encode_frame(gap, wire::FrameBytes{buf});
+
+  Frame out{};
+  REQUIRE(wire::decode_frame(wire::ConstFrameBytes{buf}, out) == wire::DecodeError::kOk);
+
+  REQUIRE(wire::is_gap(out));
+  CHECK(out.seq == 1000);
+  CHECK(wire::gap_count(out) == 42);
+  CHECK(wire::gap_reason(out) == GapReason::kIngestLoss);
+
+  // The next real frame follows the gap, so a consumer can close its books
+  // without guessing where the stream resumes.
+  CHECK(out.seq + wire::gap_count(out) == 1042);
+}
+
+TEST_CASE("an ordinary frame is not mistaken for a gap", "[wire][gap]") {
+  const auto bytes = as_bytes(kGoldenRecord);
+  Frame f{};
+  REQUIRE(wire::decode_frame(wire::ConstFrameBytes{bytes}, f) == wire::DecodeError::kOk);
+  CHECK_FALSE(wire::is_gap(f));
 }

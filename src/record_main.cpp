@@ -1,8 +1,13 @@
 // Recorder: connects to a gateway port and appends what it receives to a file.
 //
-// Deliberately dumb for M1 - open, append, count. No rotation, no fsync policy,
-// no gap records in the file. All of that is M3, and adding it now would blur
-// what M1 is for.
+// Deliberately dumb - open, append, count. Still no rotation and no retention
+// policy; those remain out of scope.
+//
+// Gap markers are written to the file exactly as received. A capture that
+// silently omitted its own holes would be a recording that lies about what it
+// is missing, which is precisely the failure the marker mechanism exists to
+// prevent - and it would make the file useless for any consumer that has to
+// distinguish "the bus was quiet" from "I was not fast enough".
 //
 // The file is written as a stream of complete wire messages, header and all,
 // rather than as bare records. It costs nothing, it makes the file
@@ -24,6 +29,7 @@
 #include <vector>
 
 #include "frame_stream.hpp"
+#include "gap_tracker.hpp"
 #include "samples.hpp"
 #include "source.hpp"
 #include "version.hpp"
@@ -110,12 +116,9 @@ int main(int argc, char** argv) {
   std::uint64_t frames = 0;
   std::uint64_t batches = 0;
   std::uint64_t bytes = 0;
-  std::uint64_t gaps = 0;
-  std::uint64_t missing = 0;
+  etg::GapTracker gaps;
   std::uint64_t write_errors = 0;
   std::uint64_t protocol_errs = 0;
-  bool have_last = false;
-  std::uint64_t last_seq = 0;
 
   etg::Samples write_ns;
   std::vector<etg::Frame> batch;
@@ -136,6 +139,7 @@ int main(int argc, char** argv) {
       std::fprintf(stderr, "connect failed (%s), retrying\n", error.c_str());
       continue;
     }
+    gaps.reset();
     std::fprintf(stderr, "connected to %s:%u, writing %s\n", host.c_str(), port, out_path.c_str());
 
     while (g_stop == 0 && etg::monotonic_ns() < deadline) {
@@ -153,13 +157,12 @@ int main(int argc, char** argv) {
         continue;
       }
 
+      // Markers are counted, and they are also written to the file exactly as
+      // received. A capture that silently omitted its own holes would be a
+      // recording that lies about what it is missing, which is the failure this
+      // whole mechanism exists to prevent.
       for (const etg::Frame& f : batch) {
-        if (have_last && f.seq != last_seq + 1) {
-          ++gaps;
-          missing += f.seq > last_seq ? (f.seq - last_seq - 1) : 0;
-        }
-        last_seq = f.seq;
-        have_last = true;
+        static_cast<void>(gaps.observe(f));
       }
 
       // Re-encoded rather than written from the in-memory struct, for the same
@@ -193,12 +196,11 @@ int main(int argc, char** argv) {
       const std::uint64_t now = etg::monotonic_ns();
       if (now >= next_report) {
         next_report = now + 1'000'000'000ULL;
-        std::fprintf(stderr, "%llu/s total=%llu bytes=%llu gaps=%llu missing=%llu\n",
+        std::fprintf(stderr, "%llu/s total=%llu bytes=%llu lost=%llu\n",
                      static_cast<unsigned long long>(frames - last_frames),
                      static_cast<unsigned long long>(frames),
                      static_cast<unsigned long long>(bytes),
-                     static_cast<unsigned long long>(gaps),
-                     static_cast<unsigned long long>(missing));
+                     static_cast<unsigned long long>(gaps.total_lost()));
         last_frames = frames;
       }
     }
@@ -218,8 +220,8 @@ int main(int argc, char** argv) {
                "frames        %llu in %.3fs = %.1f/s\n"
                "bytes         %llu\n"
                "batches       %llu\n"
-               "gaps          %llu\n"
-               "missing       %llu frames\n"
+               "markers       %llu  (%llu frames, gateway-reported)\n"
+               "silent jumps  %llu  (%llu frames, no marker: a protocol fault)\n"
                "write_errors  %llu\n"
                "protocol_errs %llu\n"
                "\n"
@@ -229,8 +231,10 @@ int main(int argc, char** argv) {
                elapsed > 0.0 ? static_cast<double>(frames) / elapsed : 0.0,
                static_cast<unsigned long long>(bytes),
                static_cast<unsigned long long>(batches),
-               static_cast<unsigned long long>(gaps),
-               static_cast<unsigned long long>(missing),
+               static_cast<unsigned long long>(gaps.stats().markers),
+               static_cast<unsigned long long>(gaps.stats().reported_lost),
+               static_cast<unsigned long long>(gaps.stats().silent_jumps),
+               static_cast<unsigned long long>(gaps.stats().silent_lost),
                static_cast<unsigned long long>(write_errors),
                static_cast<unsigned long long>(protocol_errs),
                static_cast<unsigned long long>(p.count), static_cast<long long>(p.min),

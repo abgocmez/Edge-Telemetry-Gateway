@@ -21,14 +21,15 @@ import struct
 import sys
 
 MAGIC = b"ETG1"
-VERSION = 1
+VERSION = 2
 HEADER_SIZE = 16
 RECORD_SIZE = 40
 
 FLAG_EXTENDED = 1 << 0
 FLAG_REMOTE = 1 << 1
 FLAG_ERROR = 1 << 2
-FLAG_RESERVED_MASK = 0xF8
+FLAG_GAP = 1 << 3          # v2: not a frame, a loss marker
+FLAG_RESERVED_MASK = 0xF0
 
 # Little-endian, per the spec. Never native order: the point is that the byte
 # order is defined by the document, not by whatever CPU happens to run this.
@@ -88,8 +89,16 @@ def parse_record(buf):
         "extended": bool(flags & FLAG_EXTENDED),
         "remote": bool(flags & FLAG_REMOTE),
         "error": bool(flags & FLAG_ERROR),
+        "gap": bool(flags & FLAG_GAP),
         "data": data[:length].hex(),
     }
+    if rec["gap"]:
+        # On a marker, seq names the first sequence the consumer did not get,
+        # the payload is how many are missing, and src_id is the reason rather
+        # than a bus number.
+        rec["gap_count"] = int.from_bytes(data, "little")
+        rec["gap_reason"] = "consumer_overrun" if src_id == 0 else "ingest_loss"
+    return rec
 
 
 def read_capture(path):
@@ -119,8 +128,10 @@ def main():
 
     frames = 0
     batches_seen = set()
-    gaps = 0
-    missing = 0
+    markers = 0
+    reported_lost = 0
+    silent_jumps = 0
+    silent_lost = 0
     last_seq = None
     per_source = {}
     tail = 0
@@ -129,13 +140,22 @@ def main():
         for rec in read_capture(args.path):
             if args.json:
                 print(json.dumps(rec))
+            if rec["gap"]:
+                # A marker is not a frame and must not be counted as one, nor
+                # attributed to a bus: src_id is a reason code here.
+                markers += 1
+                reported_lost += rec["gap_count"]
+                last_seq = rec["seq"] + rec["gap_count"] - 1
+                if args.limit and frames >= args.limit:
+                    break
+                continue
+
             frames += 1
             per_source[rec["src_id"]] = per_source.get(rec["src_id"], 0) + 1
             batches_seen.add(rec["can_id"])
-            if last_seq is not None and rec["seq"] != last_seq + 1:
-                gaps += 1
-                if rec["seq"] > last_seq:
-                    missing += rec["seq"] - last_seq - 1
+            if last_seq is not None and rec["seq"] > last_seq + 1:
+                silent_jumps += 1
+                silent_lost += rec["seq"] - last_seq - 1
             last_seq = rec["seq"]
             if args.limit and frames >= args.limit:
                 break
@@ -149,8 +169,8 @@ def main():
         print(f"frames      {frames}")
         print(f"can_ids     {len(batches_seen)}")
         print(f"sources     {dict(sorted(per_source.items()))}")
-        print(f"gaps        {gaps}")
-        print(f"missing     {missing}")
+        print(f"markers     {markers} ({reported_lost} frames, gateway-reported)")
+        print(f"silent      {silent_jumps} ({silent_lost} frames, unreported)")
         if tail:
             print(f"tail        {tail} trailing bytes (writer still appending?)")
 

@@ -1,4 +1,4 @@
-# Wire format — version 1
+# Wire format — version 2
 
 Normative. The implementation in `src/wire.cpp` follows this document, and
 `tests/test_wire.cpp` holds a hand-written golden byte vector that fails if
@@ -38,7 +38,7 @@ separate length prefix.
 | Offset | Size | Field | Value |
 |---|---|---|---|
 | 0 | 4 | `magic` | `45 54 47 31` — ASCII `ETG1` |
-| 4 | 1 | `version` | `1` |
+| 4 | 1 | `version` | `2` |
 | 5 | 1 | `header_len` | `16` |
 | 6 | 2 | `record_len` | `40` |
 | 8 | 4 | `count` | number of records that follow |
@@ -70,7 +70,8 @@ disagreement is rejected before any record is read.
 | 0 | `EXTENDED` | 29-bit identifier |
 | 1 | `REMOTE` | RTR frame |
 | 2 | `ERROR` | `CAN_ERR_FLAG` was set on the frame |
-| 3-7 | reserved | must be `0`; a decoder rejects a record that sets one |
+| 3 | `GAP` | **v2.** Not a frame: a loss marker. See below |
+| 4-7 | reserved | must be `0`; a decoder rejects a record that sets one |
 
 ## The two timestamps are in different clock domains
 
@@ -94,13 +95,52 @@ from a value in the other directly.
   source produced them.
 - **No total order across sources.** The interleaving of different `src_id`
   values reflects ring ticket-claim order, not bus arrival time.
-- **At-most-once delivery.** A gap in `seq` is real loss, detectable by the
-  consumer. Explicit gap records are added in M3.
+- **At-most-once delivery.** Loss is reported explicitly by a gap marker, not
+  left to be inferred from a jump in `seq`.
 
-## Not in version 1
+## Gap markers (version 2)
+
+A record with `GAP` set is not a frame. It reports loss:
+
+| Field | Meaning on a marker |
+|---|---|
+| `seq` | the first sequence this consumer did **not** receive |
+| `data` | u64, little-endian: how many frames are missing |
+| `src_id` | the reason, **not** a bus number: `0` consumer overrun, `1` ingest loss |
+| `t_ingest_ns` | when the gateway emitted the marker |
+| `t_kernel_ns` | `0`; a marker was never on a bus |
+| `can_id`, `len`, `flags` | `0`, `8`, `GAP` |
+
+The next real frame therefore has sequence `seq + count`, so a consumer can
+close its books without guessing where the stream resumes.
+
+**Markers are emitted by the gateway, not inferred by the consumer**, because
+only the gateway can say *why*. A consumer can see that sequences 100 to 149
+never arrived; it cannot tell whether it was too slow or whether the kernel
+dropped them upstream of the pipeline — and those two facts call for entirely
+different responses. The second case does not even produce a jump in `seq`:
+frames the kernel discarded never received a sequence number, so the stream
+stays dense and the loss is invisible without a marker.
+
+A consumer should still track sequence jumps that arrive with **no** preceding
+marker. Under version 2 that must not happen, so it is not a fallback detector —
+it is the check that the marker mechanism is working.
+
+## Why version 2 exists
+
+Version 1 declared bits 3-7 reserved and required a decoder to reject any record
+that set one. Gap markers need a bit, so introducing them was necessarily a
+version bump.
+
+That refusal is the feature, not an obstacle to work around. Had the bit been
+quietly reused at version 1, every already-deployed consumer would have begun
+reading loss markers as CAN frames with identifier `0` and a payload that is
+really a count. Instead they refuse the stream and say why. This is what the
+version byte was reserved for; it turned out to be gap markers rather than CAN
+FD, which was the original guess.
+
+## Not in version 2
 
 - CAN FD. A 64-byte payload would make the record 88 bytes and break the
-  one-cell-per-cache-line property. Adding it is a version bump, and is the
-  worked example of what `version` and `record_len` are for.
-- Explicit gap records (M3).
+  one-cell-per-cache-line property. Another version bump when it arrives.
 - Compression, encryption, authentication.

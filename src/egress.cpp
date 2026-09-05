@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstring>
 
+#include "source.hpp"
 #include "tcp.hpp"
 #include "wire.hpp"
 
@@ -17,6 +18,20 @@ namespace etg {
 namespace {
 
 constexpr int kPollTimeoutMs = 100;
+
+// Roughly 1600 frames in flight.
+//
+// Left at the default, the kernel will happily buffer megabytes: a slow consumer
+// then reads data that is seconds old while the gateway believes it has "sent"
+// it, and the decision about what to discard quietly moves into the socket,
+// where nobody counts it and no consumer is told. Bounding it keeps the drop
+// where it can be measured and reported - in the gateway's own queue or ring,
+// with a marker on the wire - and makes EWOULDBLOCK mean what the back-pressure
+// story says it means.
+//
+// Observed before this was set: 2.9 MB in flight, a consumer 50k frames behind,
+// and three gap markers the consumer had not reached by the end of the run.
+constexpr int kSendBufferBytes = 64 * 1024;
 constexpr std::chrono::milliseconds kPopTimeout{50};
 
 }  // namespace
@@ -90,6 +105,7 @@ void Egress::drop_client() {
     client_fd_ = -1;
     pending_.clear();
     pending_offset_ = 0;
+    have_seq_ = false;
     connected_.store(false, std::memory_order_relaxed);
     disconnects_.fetch_add(1, std::memory_order_relaxed);
   }
@@ -118,6 +134,10 @@ bool Egress::wait_for_client() {
       std::string error;
       const int fd = tcp::accept_nonblocking(listen_fd_, would_block, error);
       if (fd >= 0) {
+        // Best-effort: a kernel that refuses is no reason to reject the client,
+        // it just means more is in flight than intended.
+        static_cast<void>(::setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &kSendBufferBytes,
+                                       sizeof(kSendBufferBytes)));
         client_fd_ = fd;
         connected_.store(true, std::memory_order_relaxed);
         connects_.fetch_add(1, std::memory_order_relaxed);
@@ -143,6 +163,25 @@ bool Egress::client_gone() {
     return false;
   }
   return (pfd.revents & (POLLRDHUP | POLLHUP | POLLERR | POLLNVAL)) != 0;
+}
+
+void Egress::note_gap(std::span<const Frame> frames) {
+  if (frames.empty()) {
+    return;
+  }
+  outgoing_.clear();
+
+  if (have_seq_ && frames.front().seq > next_seq_) {
+    const std::uint64_t missing = frames.front().seq - next_seq_;
+    outgoing_.push_back(wire::make_gap(next_seq_, missing, GapReason::kConsumerOverrun,
+                                       monotonic_ns()));
+    gaps_sent_.fetch_add(1, std::memory_order_relaxed);
+    frames_lost_.fetch_add(missing, std::memory_order_relaxed);
+  }
+
+  outgoing_.insert(outgoing_.end(), frames.begin(), frames.end());
+  next_seq_ = frames.back().seq + 1;
+  have_seq_ = true;
 }
 
 void Egress::encode_batch(std::span<const Frame> frames) {
@@ -237,7 +276,8 @@ void Egress::run() {
       continue;
     }
 
-    encode_batch(std::span<const Frame>{batch.data(), n});
+    note_gap(std::span<const Frame>{batch.data(), n});
+    encode_batch(std::span<const Frame>{outgoing_});
     if (!flush_pending()) {
       drop_client();
       continue;
@@ -257,6 +297,8 @@ Egress::Stats Egress::stats() const noexcept {
   s.partial_writes = partial_writes_.load(std::memory_order_relaxed);
   s.connects = connects_.load(std::memory_order_relaxed);
   s.disconnects = disconnects_.load(std::memory_order_relaxed);
+  s.gaps_sent = gaps_sent_.load(std::memory_order_relaxed);
+  s.frames_lost = frames_lost_.load(std::memory_order_relaxed);
   s.connected = connected_.load(std::memory_order_relaxed);
   return s;
 }

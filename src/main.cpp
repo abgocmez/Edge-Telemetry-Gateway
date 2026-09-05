@@ -335,7 +335,8 @@ int main(int argc, char** argv) {
     const etg::FeedStats fs = feeds[i]->stats();
     std::fprintf(stderr,
                  "consumer %-10s sent=%llu bytes=%llu batches=%llu dropped=%llu "
-                 "would_block=%llu partial=%llu connects=%llu disconnects=%llu\n",
+                 "would_block=%llu partial=%llu connects=%llu disconnects=%llu "
+                 "gaps_sent=%llu frames_lost=%llu\n",
                  egresses[i]->name().c_str(), static_cast<unsigned long long>(es.frames_sent),
                  static_cast<unsigned long long>(es.bytes_sent),
                  static_cast<unsigned long long>(es.batches_sent),
@@ -343,7 +344,9 @@ int main(int argc, char** argv) {
                  static_cast<unsigned long long>(es.would_block),
                  static_cast<unsigned long long>(es.partial_writes),
                  static_cast<unsigned long long>(es.connects),
-                 static_cast<unsigned long long>(es.disconnects));
+                 static_cast<unsigned long long>(es.disconnects),
+                 static_cast<unsigned long long>(es.gaps_sent),
+                 static_cast<unsigned long long>(es.frames_lost));
   }
   return 0;
 }

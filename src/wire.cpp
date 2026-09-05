@@ -47,6 +47,34 @@ const char* to_string(DecodeError e) noexcept {
   return "unknown";
 }
 
+Frame make_gap(std::uint64_t first_missing, std::uint64_t count, GapReason reason,
+               std::uint64_t t_ingest_ns) noexcept {
+  Frame f{};
+  f.seq = first_missing;
+  f.t_ingest_ns = t_ingest_ns;
+  f.t_kernel_ns = 0;
+  f.can_id = 0;
+  f.src_id = static_cast<std::uint8_t>(reason);  // not a bus number on a marker
+  f.len = 8;
+  f.flags = frame_flags::kGap;
+  for (std::size_t i = 0; i < 8; ++i) {
+    f.data[i] = static_cast<std::uint8_t>((count >> (8U * i)) & 0xFFU);
+  }
+  return f;
+}
+
+bool is_gap(const Frame& f) noexcept { return (f.flags & frame_flags::kGap) != 0U; }
+
+std::uint64_t gap_count(const Frame& f) noexcept {
+  std::uint64_t v = 0;
+  for (std::size_t i = 0; i < 8; ++i) {
+    v |= static_cast<std::uint64_t>(f.data[i]) << (8U * i);
+  }
+  return v;
+}
+
+GapReason gap_reason(const Frame& f) noexcept { return static_cast<GapReason>(f.src_id); }
+
 void encode_frame(const Frame& f, FrameBytes out) noexcept {
   std::byte* p = out.data();
   store_le<std::uint64_t>(f.seq,         p + 0);

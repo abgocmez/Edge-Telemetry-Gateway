@@ -26,11 +26,14 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <chrono>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "frame_stream.hpp"
+#include "gap_tracker.hpp"
 #include "samples.hpp"
 #include "source.hpp"
 #include "version.hpp"
@@ -57,6 +60,8 @@ void usage() {
                "  --e2e            also measure end-to-end latency; requires frames\n"
                "                   produced by etg-gen, which puts its send timestamp\n"
                "                   in the payload\n"
+               "  --stall-us N     sleep N microseconds per batch, to make this\n"
+               "                   consumer deliberately too slow to keep up\n"
                "  --csv PATH       write every retained gateway-latency sample\n",
                etg::version().data());
 }
@@ -95,6 +100,7 @@ int main(int argc, char** argv) {
   bool reconnect = false;
   bool measure_e2e = false;
   int warmup = 0;
+  int stall_us = 0;
 
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -107,6 +113,8 @@ int main(int argc, char** argv) {
       seconds = std::atoi(argv[++i]);
     } else if (arg == "--warmup" && has_value) {
       warmup = std::atoi(argv[++i]);
+    } else if (arg == "--stall-us" && has_value) {
+      stall_us = std::atoi(argv[++i]);
     } else if (arg == "--csv" && has_value) {
       csv_path = argv[++i];
     } else if (arg == "--reconnect") {
@@ -132,12 +140,9 @@ int main(int argc, char** argv) {
 
   std::uint64_t frames = 0;
   std::uint64_t batches = 0;
-  std::uint64_t gaps = 0;
-  std::uint64_t missing = 0;
   std::uint64_t protocol_errs = 0;
   std::uint64_t reconnects = 0;
-  bool have_last = false;
-  std::uint64_t last_seq = 0;
+  etg::GapTracker gaps;
 
   etg::Samples gw_latency;
   etg::Samples e2e_latency;
@@ -172,6 +177,8 @@ int main(int argc, char** argv) {
       continue;
     }
     ++reconnects;
+    // Not loss: this consumer was simply not there for whatever it missed.
+    gaps.reset();
     std::fprintf(stderr, "connected to %s:%u\n", host.c_str(), port);
 
     while (g_stop == 0 && etg::monotonic_ns() < deadline) {
@@ -187,6 +194,13 @@ int main(int argc, char** argv) {
         break;
       }
 
+      // The overload lever. Nothing about the pipeline changes; this consumer
+      // simply cannot keep up, which is the only honest way to test what happens
+      // to one that cannot.
+      if (stall_us > 0 && st == etg::FrameStream::Status::kOk) {
+        std::this_thread::sleep_for(std::chrono::microseconds{stall_us});
+      }
+
       if (st == etg::FrameStream::Status::kOk) {
         // One reading for the whole batch, which is not an approximation: these
         // frames genuinely did arrive in the same read.
@@ -194,12 +208,11 @@ int main(int argc, char** argv) {
         ++batches;
 
         for (const etg::Frame& f : batch) {
-          if (have_last && f.seq != last_seq + 1) {
-            ++gaps;
-            missing += f.seq > last_seq ? (f.seq - last_seq - 1) : 0;
+          // A marker is not a frame: it never existed on a bus, so measuring
+          // latency against it would inject a fabricated sample.
+          if (!gaps.observe(f)) {
+            continue;
           }
-          last_seq = f.seq;
-          have_last = true;
           ++frames;
 
           if (now < measure_from) {
@@ -219,11 +232,10 @@ int main(int argc, char** argv) {
       if (now >= next_report) {
         next_report = now + 1'000'000'000ULL;
         const etg::Percentiles p = gw_latency.compute();
-        std::fprintf(stderr, "%llu/s total=%llu gaps=%llu missing=%llu gw_p50=%lldns\n",
+        std::fprintf(stderr, "%llu/s total=%llu lost=%llu gw_p50=%lldns\n",
                      static_cast<unsigned long long>(frames - last_frames),
                      static_cast<unsigned long long>(frames),
-                     static_cast<unsigned long long>(gaps),
-                     static_cast<unsigned long long>(missing),
+                     static_cast<unsigned long long>(gaps.total_lost()),
                      static_cast<long long>(p.p50));
         last_frames = frames;
       }
@@ -239,8 +251,8 @@ int main(int argc, char** argv) {
                "\n"
                "frames        %llu in %.3fs = %.1f/s\n"
                "batches       %llu (mean %.1f frames/batch)\n"
-               "gaps          %llu\n"
-               "missing       %llu frames\n"
+               "markers       %llu  (%llu frames, gateway-reported)\n"
+               "silent jumps  %llu  (%llu frames, no marker: a protocol fault)\n"
                "connections   %llu\n"
                "protocol_errs %llu\n"
                "warmup        %llu samples discarded (first %ds)\n"
@@ -250,8 +262,10 @@ int main(int argc, char** argv) {
                elapsed > 0.0 ? static_cast<double>(frames) / elapsed : 0.0,
                static_cast<unsigned long long>(batches),
                batches > 0 ? static_cast<double>(frames) / static_cast<double>(batches) : 0.0,
-               static_cast<unsigned long long>(gaps),
-               static_cast<unsigned long long>(missing),
+               static_cast<unsigned long long>(gaps.stats().markers),
+               static_cast<unsigned long long>(gaps.stats().reported_lost),
+               static_cast<unsigned long long>(gaps.stats().silent_jumps),
+               static_cast<unsigned long long>(gaps.stats().silent_lost),
                static_cast<unsigned long long>(reconnects),
                static_cast<unsigned long long>(protocol_errs),
                static_cast<unsigned long long>(warmup_discarded), warmup);
@@ -271,5 +285,8 @@ int main(int argc, char** argv) {
 
   // Loss is reported, never hidden, but it is not a probe failure: under
   // at-most-once delivery a gap is the system working as designed.
-  return protocol_errs > 0 ? 1 : 0;
+  // A silent jump means the gateway lost frames and did not say so: a fault in
+  // the mechanism, not in the data. Loss itself is not a failure - under
+  // at-most-once, a reported gap is the system working as designed.
+  return (protocol_errs > 0 || gaps.stats().silent_jumps > 0) ? 1 : 0;
 }

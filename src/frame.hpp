@@ -7,15 +7,28 @@
 
 namespace etg {
 
-// Flags carried in Frame::flags. Bits 3-7 are reserved and must be zero in
-// wire version 1; a decoder rejects a record that sets them, so adding a flag
-// later is a version bump rather than a silent misread.
+// Flags carried in Frame::flags.
+//
+// Bit 3 is the worked example of why the reserved bits and the version byte
+// exist. Wire version 1 declared bits 3-7 reserved and required a decoder to
+// *reject* a record that set one. Gap markers need a bit, so introducing them
+// was necessarily a version bump - a v1 consumer refuses a v2 stream outright
+// rather than silently misreading a marker as a CAN frame. That refusal is the
+// feature.
 namespace frame_flags {
 inline constexpr std::uint8_t kExtendedId = 1U << 0U;  // 29-bit CAN identifier
 inline constexpr std::uint8_t kRemote     = 1U << 1U;  // RTR
 inline constexpr std::uint8_t kError      = 1U << 2U;  // CAN_ERR_FLAG was set
-inline constexpr std::uint8_t kReservedMask = 0xF8U;   // bits 3-7
+inline constexpr std::uint8_t kGap        = 1U << 3U;  // v2: not a frame, a loss marker
+inline constexpr std::uint8_t kReservedMask = 0xF0U;   // bits 4-7
 }  // namespace frame_flags
+
+// Why a consumer lost the frames a gap marker describes. Carried in src_id,
+// which is not a bus number on a marker.
+enum class GapReason : std::uint8_t {
+  kConsumerOverrun = 0,  // this consumer fell behind and was overwritten
+  kIngestLoss = 1,       // the kernel dropped them; nobody ever had them
+};
 
 // One normalised bus frame. Fixed size, trivially copyable, no indirection: it
 // is copied straight into a ring slot, so nothing here may own memory.

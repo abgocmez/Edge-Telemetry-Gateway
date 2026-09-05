@@ -42,6 +42,8 @@ class Egress {
     std::uint64_t partial_writes = 0;  // a write that took only part of the buffer
     std::uint64_t connects = 0;
     std::uint64_t disconnects = 0;
+    std::uint64_t gaps_sent = 0;    // loss markers emitted to this consumer
+    std::uint64_t frames_lost = 0;  // frames those markers accounted for
     bool connected = false;
   };
 
@@ -68,6 +70,15 @@ class Egress {
   bool flush_pending();            // returns false when the client is gone
   bool client_gone();              // peer closed, seen without writing to it
   void encode_batch(std::span<const Frame> frames);
+
+  // Detects loss from the sequence numbers themselves and prepends a marker.
+  //
+  // Done here rather than in the feed because it works identically for both
+  // topologies: whether a mutex queue overwrote the oldest entry or a ring cell
+  // was lapped, the consumer's next frame simply arrives with a higher sequence
+  // than the one after the last it received. The egress is also the only place
+  // that knows what this particular consumer actually got.
+  void note_gap(std::span<const Frame> frames);
   void drop_client();
 
   std::string name_;
@@ -80,6 +91,16 @@ class Egress {
   std::vector<std::byte> pending_;
   std::size_t pending_offset_ = 0;
 
+  // Reused buffer so a batch that needs a marker prepended does not allocate on
+  // the hot path.
+  std::vector<Frame> outgoing_;
+
+  // Reset on disconnect: a consumer that reconnects and finds the stream has
+  // moved on did not "lose" anything, it simply was not there. Reporting that
+  // as loss would make every restart look like a fault.
+  std::uint64_t next_seq_ = 0;
+  bool have_seq_ = false;
+
   std::thread thread_;
   bool started_ = false;
 
@@ -90,6 +111,8 @@ class Egress {
   std::atomic<std::uint64_t> partial_writes_{0};
   std::atomic<std::uint64_t> connects_{0};
   std::atomic<std::uint64_t> disconnects_{0};
+  std::atomic<std::uint64_t> gaps_sent_{0};
+  std::atomic<std::uint64_t> frames_lost_{0};
   std::atomic<bool> connected_{false};
 };
 
