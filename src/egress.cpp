@@ -37,8 +37,8 @@ constexpr std::chrono::milliseconds kPopTimeout{50};
 }  // namespace
 
 std::unique_ptr<Egress> Egress::create(std::string name, ConsumerFeed& feed, std::uint16_t port,
-                                       Batching batching, std::string& error) {
-  if (batching.max_frames == 0 || batching.max_frames > kMaxBatch) {
+                                       Tuning tuning, std::string& error) {
+  if (tuning.max_frames == 0 || tuning.max_frames > kMaxBatch) {
     error = "batch size must be between 1 and " + std::to_string(kMaxBatch);
     return nullptr;
   }
@@ -57,29 +57,113 @@ std::unique_ptr<Egress> Egress::create(std::string name, ConsumerFeed& feed, std
   // Port 0 means the kernel picked one; report what it actually chose.
   const std::uint16_t bound = tcp::local_port(listen_fd);
   return std::unique_ptr<Egress>{
-      new Egress(std::move(name), feed, bound != 0 ? bound : port, batching, listen_fd, stop_fd)};
+      new Egress(std::move(name), feed, bound != 0 ? bound : port, tuning, listen_fd, stop_fd)};
 }
 
-Egress::Egress(std::string name, ConsumerFeed& feed, std::uint16_t port, Batching batching,
+Egress::Egress(std::string name, ConsumerFeed& feed, std::uint16_t port, Tuning tuning,
                int listen_fd, int stop_fd)
     : name_(std::move(name)),
       feed_(feed),
       port_(port),
-      batching_(batching),
+      tuning_(tuning),
       listen_fd_(listen_fd),
       stop_fd_(stop_fd) {
-  pending_.reserve(wire::kHeaderSize + batching_.max_frames * wire::kRecordSize);
+  pending_.reserve(wire::kHeaderSize + tuning_.max_frames * wire::kRecordSize);
+  reply_buf_.reserve(4096);
+}
+
+void Egress::maybe_send_echo() {
+  if (tuning_.echo_ms == 0 || client_fd_ < 0) {
+    return;
+  }
+  const std::uint64_t now = monotonic_ns();
+  if (now < next_echo_ns_) {
+    return;
+  }
+
+  // A probe that never came back is written off rather than waited on. Holding
+  // the slot would mean one lost reply stops every later measurement, which
+  // turns a missing sample into a missing experiment.
+  if (echo_outstanding_) {
+    echoes_lost_.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  ++echo_nonce_;
+  echo_sent_ns_ = now;
+  echo_outstanding_ = true;
+  next_echo_ns_ = now + static_cast<std::uint64_t>(tuning_.echo_ms) * 1'000'000ULL;
+
+  outgoing_.push_back(wire::make_echo(echo_nonce_, echo_sent_ns_));
+  echoes_sent_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void Egress::drain_replies() {
+  if (client_fd_ < 0) {
+    return;
+  }
+
+  std::array<std::byte, 512> buf{};
+  for (;;) {
+    const ssize_t n = ::recv(client_fd_, buf.data(), buf.size(), MSG_DONTWAIT);
+    if (n <= 0) {
+      break;  // EAGAIN, or the peer is gone and flush_pending will find out
+    }
+    reply_buf_.insert(reply_buf_.end(), buf.begin(), buf.begin() + n);
+    if (reply_buf_.size() > 64 * 1024) {
+      // A consumer sending anything but echo replies is misbehaving; do not let
+      // it grow a buffer here on the gateway's behalf.
+      reply_buf_.clear();
+    }
+  }
+
+  std::size_t off = 0;
+  while (reply_buf_.size() - off >= wire::kHeaderSize) {
+    wire::BatchHeader header{};
+    if (wire::decode_header(wire::ConstHeaderBytes{reply_buf_.data() + off, wire::kHeaderSize},
+                            header) != wire::DecodeError::kOk) {
+      reply_buf_.clear();  // out of sync; the only safe move is to start over
+      return;
+    }
+    if (reply_buf_.size() - off < wire::kHeaderSize + header.payload_len) {
+      break;  // incomplete
+    }
+
+    const std::byte* p = reply_buf_.data() + off + wire::kHeaderSize;
+    for (std::uint32_t i = 0; i < header.count; ++i) {
+      Frame f{};
+      if (wire::decode_frame(wire::ConstFrameBytes{p + i * wire::kRecordSize, wire::kRecordSize},
+                             f) != wire::DecodeError::kOk) {
+        continue;
+      }
+      if (!wire::is_echo(f) || !echo_outstanding_ || wire::echo_nonce(f) != echo_nonce_) {
+        continue;  // stale or unexpected; ignore rather than mismatch a sample
+      }
+      const std::int64_t rtt =
+          static_cast<std::int64_t>(monotonic_ns()) - static_cast<std::int64_t>(echo_sent_ns_);
+      {
+        const std::lock_guard<std::mutex> lock(rtt_mutex_);
+        rtt_.add(rtt);
+      }
+      echo_outstanding_ = false;
+      echoes_returned_.fetch_add(1, std::memory_order_relaxed);
+    }
+    off += wire::kHeaderSize + header.payload_len;
+  }
+
+  if (off > 0) {
+    reply_buf_.erase(reply_buf_.begin(), reply_buf_.begin() + static_cast<std::ptrdiff_t>(off));
+  }
 }
 
 std::size_t Egress::coalesce(std::vector<Frame>& batch, std::size_t have) {
-  if (batching_.linger_us == 0 || have >= batching_.max_frames) {
+  if (tuning_.linger_us == 0 || have >= tuning_.max_frames) {
     return have;
   }
 
-  const std::uint64_t deadline = monotonic_ns() + batching_.linger_us * 1000ULL;
+  const std::uint64_t deadline = monotonic_ns() + tuning_.linger_us * 1000ULL;
   bool waited = false;
 
-  while (have < batching_.max_frames) {
+  while (have < tuning_.max_frames) {
     const std::uint64_t now = monotonic_ns();
     if (now >= deadline) {
       break;
@@ -88,7 +172,7 @@ std::size_t Egress::coalesce(std::vector<Frame>& batch, std::size_t have) {
         std::chrono::milliseconds{static_cast<std::int64_t>((deadline - now) / 1'000'000ULL) + 1};
 
     const std::size_t more = feed_.pop_batch(
-        std::span<Frame>{batch.data() + have, batching_.max_frames - have}, remaining);
+        std::span<Frame>{batch.data() + have, tuning_.max_frames - have}, remaining);
     if (more == 0) {
       break;
     }
@@ -146,6 +230,8 @@ void Egress::drop_client() {
     client_fd_ = -1;
     pending_.clear();
     pending_offset_ = 0;
+    reply_buf_.clear();
+    echo_outstanding_ = false;
     reconnected_ = true;
     connected_.store(false, std::memory_order_relaxed);
     disconnects_.fetch_add(1, std::memory_order_relaxed);
@@ -298,7 +384,7 @@ bool Egress::flush_pending() {
 }
 
 void Egress::run() {
-  std::vector<Frame> batch(batching_.max_frames);
+  std::vector<Frame> batch(tuning_.max_frames);
 
   for (;;) {
     if (!wait_for_client()) {
@@ -317,8 +403,10 @@ void Egress::run() {
       continue;
     }
 
+    drain_replies();
+
     std::size_t n = feed_.pop_batch(
-        std::span<Frame>{batch.data(), batching_.max_frames}, kPopTimeout);
+        std::span<Frame>{batch.data(), tuning_.max_frames}, kPopTimeout);
     if (n > 0) {
       n = coalesce(batch, n);
     }
@@ -330,6 +418,7 @@ void Egress::run() {
     }
 
     note_gap(std::span<const Frame>{batch.data(), n});
+    maybe_send_echo();
     encode_batch(std::span<const Frame>{outgoing_});
     if (!flush_pending()) {
       drop_client();
@@ -351,6 +440,16 @@ Egress::Stats Egress::stats() const noexcept {
   s.connects = connects_.load(std::memory_order_relaxed);
   s.disconnects = disconnects_.load(std::memory_order_relaxed);
   s.lingered = lingered_.load(std::memory_order_relaxed);
+  s.echoes_sent = echoes_sent_.load(std::memory_order_relaxed);
+  s.echoes_returned = echoes_returned_.load(std::memory_order_relaxed);
+  s.echoes_lost = echoes_lost_.load(std::memory_order_relaxed);
+  {
+    const std::lock_guard<std::mutex> lock(rtt_mutex_);
+    const Percentiles p = rtt_.compute();
+    s.rtt_p50_ns = p.p50;
+    s.rtt_p99_ns = p.p99;
+    s.rtt_max_ns = p.max;
+  }
   s.gaps_sent = gaps_sent_.load(std::memory_order_relaxed);
   s.frames_lost = frames_lost_.load(std::memory_order_relaxed);
   s.connected = connected_.load(std::memory_order_relaxed);

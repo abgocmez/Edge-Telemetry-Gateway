@@ -162,6 +162,10 @@ int main(int argc, char** argv) {
       // recording that lies about what it is missing, which is the failure this
       // whole mechanism exists to prevent.
       for (const etg::Frame& f : batch) {
+        if (etg::wire::is_echo(f)) {
+          static_cast<void>(stream->send_back(f));
+          continue;
+        }
         static_cast<void>(gaps.observe(f));
       }
 

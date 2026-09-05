@@ -65,6 +65,28 @@ Frame make_gap(std::uint64_t first_missing, std::uint64_t count, GapReason reaso
 
 bool is_gap(const Frame& f) noexcept { return (f.flags & frame_flags::kGap) != 0U; }
 
+Frame make_echo(std::uint64_t nonce, std::uint64_t t_sent_ns) noexcept {
+  Frame f{};
+  f.seq = nonce;          // a nonce, not a sequence
+  f.t_ingest_ns = t_sent_ns;  // the gateway's own clock, never compared elsewhere
+  f.t_kernel_ns = 0;
+  f.can_id = 0;
+  f.src_id = 0;
+  f.len = 0;
+  f.flags = frame_flags::kEcho;
+  return f;
+}
+
+bool is_echo(const Frame& f) noexcept { return (f.flags & frame_flags::kEcho) != 0U; }
+
+std::uint64_t echo_nonce(const Frame& f) noexcept { return f.seq; }
+
+std::uint64_t echo_sent_ns(const Frame& f) noexcept { return f.t_ingest_ns; }
+
+bool is_control(const Frame& f) noexcept {
+  return (f.flags & (frame_flags::kGap | frame_flags::kEcho)) != 0U;
+}
+
 std::uint64_t gap_count(const Frame& f) noexcept {
   std::uint64_t v = 0;
   for (std::size_t i = 0; i < 8; ++i) {

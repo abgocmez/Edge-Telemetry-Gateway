@@ -21,7 +21,7 @@ import struct
 import sys
 
 MAGIC = b"ETG1"
-VERSION = 2
+VERSION = 3
 HEADER_SIZE = 16
 RECORD_SIZE = 40
 
@@ -29,7 +29,8 @@ FLAG_EXTENDED = 1 << 0
 FLAG_REMOTE = 1 << 1
 FLAG_ERROR = 1 << 2
 FLAG_GAP = 1 << 3          # v2: not a frame, a loss marker
-FLAG_RESERVED_MASK = 0xF0
+FLAG_ECHO = 1 << 4         # v3: round-trip probe, echoed back to the gateway
+FLAG_RESERVED_MASK = 0xE0
 
 # Little-endian, per the spec. Never native order: the point is that the byte
 # order is defined by the document, not by whatever CPU happens to run this.
@@ -90,6 +91,7 @@ def parse_record(buf):
         "remote": bool(flags & FLAG_REMOTE),
         "error": bool(flags & FLAG_ERROR),
         "gap": bool(flags & FLAG_GAP),
+        "echo": bool(flags & FLAG_ECHO),
         "data": data[:length].hex(),
     }
     if rec["gap"]:
@@ -133,6 +135,7 @@ def main():
     reported_lost = 0
     silent_jumps = 0
     silent_lost = 0
+    echoes = 0
     last_seq = None
     per_source = {}
     tail = 0
@@ -141,6 +144,12 @@ def main():
         for rec in read_capture(args.path):
             if args.json:
                 print(json.dumps(rec))
+            if rec["echo"]:
+                # A probe, not data. Its sequence field is a nonce, so counting
+                # it would make the next real frame look like an enormous jump.
+                echoes += 1
+                continue
+
             if rec["gap"]:
                 # A marker is not a frame and must not be counted as one, nor
                 # attributed to a bus: src_id is a reason code here.
@@ -172,6 +181,8 @@ def main():
         print(f"sources     {dict(sorted(per_source.items()))}")
         print(f"markers     {markers} ({reported_lost} frames, gateway-reported)")
         print(f"silent      {silent_jumps} ({silent_lost} frames, unreported)")
+        if echoes:
+            print(f"echoes      {echoes} (round-trip probes, not data)")
         if tail:
             print(f"tail        {tail} trailing bytes (writer still appending?)")
 

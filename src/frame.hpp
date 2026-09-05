@@ -20,7 +20,8 @@ inline constexpr std::uint8_t kExtendedId = 1U << 0U;  // 29-bit CAN identifier
 inline constexpr std::uint8_t kRemote     = 1U << 1U;  // RTR
 inline constexpr std::uint8_t kError      = 1U << 2U;  // CAN_ERR_FLAG was set
 inline constexpr std::uint8_t kGap        = 1U << 3U;  // v2: not a frame, a loss marker
-inline constexpr std::uint8_t kReservedMask = 0xF0U;   // bits 4-7
+inline constexpr std::uint8_t kEcho       = 1U << 4U;  // v3: round-trip probe, echoed back
+inline constexpr std::uint8_t kReservedMask = 0xE0U;   // bits 5-7
 }  // namespace frame_flags
 
 // Why a consumer lost the frames a gap marker describes. Carried in src_id,

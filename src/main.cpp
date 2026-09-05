@@ -59,6 +59,10 @@ void usage() {
                "  --linger-us N          wait up to N microseconds to fill a batch.\n"
                "                         0 sends immediately: lowest latency, and one\n"
                "                         write syscall per frame at low rates\n"
+               "  --echo-ms N            send a round-trip probe every N ms, 0 to\n"
+               "                         disable. Timed by this machine alone, so\n"
+               "                         it needs no clock agreement with the\n"
+               "                         consumer - unlike one-way latency\n"
                "  --rate N               synthetic source rate in frames/s (default 1000)\n"
                "  --seconds N            run for N seconds (0 = until interrupted)\n"
                "  --tap                  print every frame; only useful at low rates\n",
@@ -109,7 +113,7 @@ int main(int argc, char** argv) {
   std::vector<ConsumerSpec> consumers;
   std::string topology = "ring";
   std::size_t capacity = 8192;
-  etg::Egress::Batching batching;
+  etg::Egress::Tuning tuning;
   std::uint32_t rate = 1000;
   int seconds = 0;
   bool tap = false;
@@ -131,9 +135,11 @@ int main(int argc, char** argv) {
     } else if ((arg == "--capacity" || arg == "--queue") && has_value) {
       capacity = std::strtoul(argv[++i], nullptr, 10);
     } else if (arg == "--batch" && has_value) {
-      batching.max_frames = std::strtoul(argv[++i], nullptr, 10);
+      tuning.max_frames = std::strtoul(argv[++i], nullptr, 10);
+    } else if (arg == "--echo-ms" && has_value) {
+      tuning.echo_ms = static_cast<std::uint32_t>(std::strtoul(argv[++i], nullptr, 10));
     } else if (arg == "--linger-us" && has_value) {
-      batching.linger_us = static_cast<std::uint32_t>(std::strtoul(argv[++i], nullptr, 10));
+      tuning.linger_us = static_cast<std::uint32_t>(std::strtoul(argv[++i], nullptr, 10));
     } else if (arg == "--rate" && has_value) {
       rate = static_cast<std::uint32_t>(std::strtoul(argv[++i], nullptr, 10));
     } else if (arg == "--seconds" && has_value) {
@@ -212,7 +218,7 @@ int main(int argc, char** argv) {
 
   std::vector<std::unique_ptr<etg::Egress>> egresses;
   for (std::size_t i = 0; i < consumers.size(); ++i) {
-    auto e = etg::Egress::create(consumers[i].name, *feeds[i], consumers[i].port, batching, error);
+    auto e = etg::Egress::create(consumers[i].name, *feeds[i], consumers[i].port, tuning, error);
     if (!e) {
       std::fprintf(stderr, "consumer %s: %s\n", consumers[i].name.c_str(), error.c_str());
       return 1;
@@ -255,8 +261,8 @@ int main(int argc, char** argv) {
   }
 
   std::fprintf(stderr, "topology %s, %zu source(s), capacity %zu, batch %zu, linger %uus\n", topology.c_str(),
-               source_ptrs.size(), ring ? ring->capacity() : capacity, batching.max_frames,
-               batching.linger_us);
+               source_ptrs.size(), ring ? ring->capacity() : capacity, tuning.max_frames,
+               tuning.linger_us);
   for (const auto& s : sources) {
     std::fprintf(stderr, "  source %s\n", std::string{s->name()}.c_str());
   }
@@ -358,6 +364,25 @@ int main(int argc, char** argv) {
                  static_cast<unsigned long long>(es.gaps_sent),
                  static_cast<unsigned long long>(es.frames_lost),
                  static_cast<unsigned long long>(es.lingered));
+
+    // Reported separately because it is a different kind of number. A round trip
+    // is timed entirely by this machine, start to finish, so it needs no
+    // agreement with the consumer's clock - which is what makes it usable when a
+    // one-way figure is not. Half of it is the one-way delay, assuming the path
+    // is symmetric and accepting that the consumer's turnaround is inside it.
+    if (es.echoes_sent > 0) {
+      std::fprintf(stderr,
+                   "         %-10s rtt sent=%llu returned=%llu lost=%llu | "
+                   "p50=%.1fus p99=%.1fus max=%.1fus | one-way p50 ~%.1fus\n",
+                   egresses[i]->name().c_str(),
+                   static_cast<unsigned long long>(es.echoes_sent),
+                   static_cast<unsigned long long>(es.echoes_returned),
+                   static_cast<unsigned long long>(es.echoes_lost),
+                   static_cast<double>(es.rtt_p50_ns) / 1000.0,
+                   static_cast<double>(es.rtt_p99_ns) / 1000.0,
+                   static_cast<double>(es.rtt_max_ns) / 1000.0,
+                   static_cast<double>(es.rtt_p50_ns) / 2000.0);
+    }
   }
   return 0;
 }

@@ -1,4 +1,4 @@
-# Wire format — version 2
+# Wire format — version 3
 
 Normative. The implementation in `src/wire.cpp` follows this document, and
 `tests/test_wire.cpp` holds a hand-written golden byte vector that fails if
@@ -38,7 +38,7 @@ separate length prefix.
 | Offset | Size | Field | Value |
 |---|---|---|---|
 | 0 | 4 | `magic` | `45 54 47 31` — ASCII `ETG1` |
-| 4 | 1 | `version` | `2` |
+| 4 | 1 | `version` | `3` |
 | 5 | 1 | `header_len` | `16` |
 | 6 | 2 | `record_len` | `40` |
 | 8 | 4 | `count` | number of records that follow |
@@ -71,7 +71,8 @@ disagreement is rejected before any record is read.
 | 1 | `REMOTE` | RTR frame |
 | 2 | `ERROR` | `CAN_ERR_FLAG` was set on the frame |
 | 3 | `GAP` | **v2.** Not a frame: a loss marker. See below |
-| 4-7 | reserved | must be `0`; a decoder rejects a record that sets one |
+| 4 | `ECHO` | **v3.** Not a frame: a round-trip probe. See below |
+| 5-7 | reserved | must be `0`; a decoder rejects a record that sets one |
 
 ## The two timestamps are in different clock domains
 
@@ -145,6 +146,45 @@ A consumer should still track sequence jumps that arrive with **no** preceding
 marker. Under version 2 that must not happen, so it is not a fallback detector —
 it is the check that the marker mechanism is working.
 
+## Echo probes (version 3)
+
+A record with `ECHO` set is not a frame either. The gateway emits one
+periodically; a consumer **sends it straight back, unchanged, on the same
+connection** and does not count it, timestamp it, or record it.
+
+| Field | Meaning on an echo |
+|---|---|
+| `seq` | a nonce, **not** a sequence |
+| `t_ingest_ns` | when the gateway sent it, on the gateway's own clock |
+| everything else | zero |
+
+This is the reverse direction of the connection, and the only use of it.
+
+### Why an echo rather than a one-way timestamp
+
+Because one-way latency between two machines requires their clocks to agree, and
+measuring it on the pair this was built for showed that they do not: the
+consumer's host had never completed a single NTP exchange, and the two
+`CLOCK_REALTIME` clocks differed by 1.19 seconds. An echo is timed by one clock,
+on one machine, from send to return — there is nothing to agree about.
+
+It travels **in-band**, through the same batching and the same socket as the
+frames around it, and that is not incidental. Measured across a LAN at 20 000
+frames/s against an idle side-channel doing the same thing:
+
+| | idle channel | in-band |
+|---|---|---|
+| RTT p50 | 518 µs | 524.6 µs |
+| RTT p99 | 2294 µs | 25 460 µs |
+
+The medians agree to within six microseconds, which is the cross-check. The
+tails differ elevenfold, which is the reason to bother: a probe on an idle
+socket measures the network, while a probe queued behind real traffic measures
+what a frame actually experiences.
+
+Two caveats that are stated rather than corrected for: halving assumes the path
+is symmetric, and the consumer's turnaround time is inside the figure.
+
 ## Why version 2 exists
 
 Version 1 declared bits 3-7 reserved and required a decoder to reject any record
@@ -158,7 +198,7 @@ really a count. Instead they refuse the stream and say why. This is what the
 version byte was reserved for; it turned out to be gap markers rather than CAN
 FD, which was the original guess.
 
-## Not in version 2
+## Not in version 3
 
 - CAN FD. A 64-byte payload would make the record 88 bytes and break the
   one-cell-per-cache-line property. Another version bump when it arrives.

@@ -1,7 +1,10 @@
 #include "frame_stream.hpp"
 
 #include <poll.h>
+#include <sys/socket.h>
 #include <unistd.h>
+
+#include <array>
 
 #include <cerrno>
 #include <chrono>
@@ -84,6 +87,30 @@ FrameStream::Status FrameStream::fill(std::size_t need, std::int64_t deadline_ms
     }
   }
   return Status::kOk;
+}
+
+bool FrameStream::send_back(const Frame& f) {
+  std::array<std::byte, wire::kHeaderSize + wire::kRecordSize> msg{};
+  wire::encode_header(1, wire::HeaderBytes{msg.data(), wire::kHeaderSize});
+  wire::encode_frame(f, wire::FrameBytes{msg.data() + wire::kHeaderSize, wire::kRecordSize});
+
+  std::size_t sent = 0;
+  while (sent < msg.size()) {
+    const ssize_t n = ::send(fd_, msg.data() + sent, msg.size() - sent,
+                             MSG_NOSIGNAL | MSG_DONTWAIT);
+    if (n > 0) {
+      sent += static_cast<std::size_t>(n);
+      continue;
+    }
+    if (n < 0 && errno == EINTR) {
+      continue;
+    }
+    // EWOULDBLOCK included: see the note in the header. A half-written reply is
+    // worse than none, so the socket is left alone and the probe is abandoned.
+    ++echo_drops_;
+    return false;
+  }
+  return true;
 }
 
 FrameStream::Status FrameStream::read_batch(std::vector<Frame>& out, int timeout_ms) {

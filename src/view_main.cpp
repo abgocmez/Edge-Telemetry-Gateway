@@ -613,6 +613,10 @@ int main(int argc, char** argv) {
         } else if (st == etg::FrameStream::Status::kOk && !batch.empty()) {
           ++state.batches;
           for (const etg::Frame& f : batch) {
+            if (etg::wire::is_echo(f)) {
+              static_cast<void>(stream->send_back(f));
+              continue;
+            }
             // Markers are loss reports, not frames: counting one as traffic
             // would show a bus carrying data that never existed.
             if (!state.gaps.observe(f)) {

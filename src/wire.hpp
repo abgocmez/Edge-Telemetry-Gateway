@@ -20,7 +20,7 @@ namespace etg::wire {
 // The alternative - quietly reusing a reserved bit - would have turned every
 // deployed v1 consumer into one that reads a loss marker as a CAN frame with a
 // nonsense identifier.
-inline constexpr std::uint8_t  kVersion    = 2;
+inline constexpr std::uint8_t  kVersion    = 3;
 inline constexpr std::size_t   kHeaderSize = 16;
 inline constexpr std::size_t   kRecordSize = 40;
 inline constexpr std::uint32_t kMaxCount   = 65535;  // sanity bound on a decoded batch
@@ -75,6 +75,30 @@ void encode_frame(const Frame& f, FrameBytes out) noexcept;
 [[nodiscard]] bool is_gap(const Frame& f) noexcept;
 [[nodiscard]] std::uint64_t gap_count(const Frame& f) noexcept;
 [[nodiscard]] GapReason gap_reason(const Frame& f) noexcept;
+
+// A round-trip probe. The gateway emits one periodically; a consumer sends it
+// straight back, unchanged, on the same connection.
+//
+// This exists because one-way latency across two machines needs their clocks to
+// agree, and measuring it revealed that they do not: on the pair this was built
+// for, the consumer's host had never completed a single NTP exchange and the two
+// realtime clocks differed by 1.19 seconds. An echo needs no agreement at all -
+// it is timed by one clock, on one machine, from send to return.
+//
+// It travels in-band, through the same batching and the same socket as the
+// frames around it, so what it measures is what a frame experiences rather than
+// what an idle side-channel would.
+//
+// The honest caveats, both unavoidable: halving assumes the path is symmetric,
+// and the consumer's turnaround time is included in the figure.
+[[nodiscard]] Frame make_echo(std::uint64_t nonce, std::uint64_t t_sent_ns) noexcept;
+[[nodiscard]] bool is_echo(const Frame& f) noexcept;
+[[nodiscard]] std::uint64_t echo_nonce(const Frame& f) noexcept;
+[[nodiscard]] std::uint64_t echo_sent_ns(const Frame& f) noexcept;
+
+// True for anything that is not a bus frame: a consumer must not count these as
+// traffic, timestamp them, or record them as data.
+[[nodiscard]] bool is_control(const Frame& f) noexcept;
 
 void encode_header(std::uint32_t count, HeaderBytes out) noexcept;
 [[nodiscard]] DecodeError decode_header(ConstHeaderBytes in, BatchHeader& out) noexcept;

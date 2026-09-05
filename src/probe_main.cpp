@@ -226,6 +226,14 @@ int main(int argc, char** argv) {
         ++batches;
 
         for (const etg::Frame& f : batch) {
+          // Returned immediately and before anything else. The gateway times the
+          // round trip with its own clock, so every microsecond spent here lands
+          // in its figure - which is why the reply goes out before the frame is
+          // counted, not after.
+          if (etg::wire::is_echo(f)) {
+            static_cast<void>(stream->send_back(f));
+            continue;
+          }
           // A marker is not a frame: it never existed on a bus, so measuring
           // latency against it would inject a fabricated sample.
           if (!gaps.observe(f)) {

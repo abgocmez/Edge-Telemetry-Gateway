@@ -7,7 +7,10 @@
 #include <thread>
 #include <vector>
 
+#include <mutex>
+
 #include "feed.hpp"
+#include "samples.hpp"
 
 namespace etg {
 
@@ -44,9 +47,26 @@ class Egress {
   static constexpr std::size_t kDefaultBatch = 256;
   static constexpr std::size_t kMaxBatch = 4096;
 
-  struct Batching {
+  // Egress tuning. Grouped because all three change what a consumer experiences
+  // rather than what the gateway computes.
+  struct Tuning {
     std::size_t max_frames = kDefaultBatch;
     std::uint32_t linger_us = 0;
+
+    // How often to send a round-trip probe, 0 to disable.
+    //
+    // The probe is timed by this machine's clock from send to return, so it
+    // needs no agreement with the consumer's clock at all - which is the point.
+    // Measuring one-way latency to another host requires the two clocks to
+    // agree, and on the pair this was built for they differ by 1.19 seconds
+    // because the consumer's host has never completed an NTP exchange.
+    //
+    // It travels in-band, through the same batching and socket as the frames
+    // around it, so it measures what a frame experiences rather than what an
+    // idle side-channel would. Halving assumes a symmetric path, and the
+    // consumer's turnaround is inside the figure; both are stated rather than
+    // corrected for.
+    std::uint32_t echo_ms = 0;
   };
 
   struct Stats {
@@ -60,15 +80,21 @@ class Egress {
     std::uint64_t gaps_sent = 0;    // loss markers emitted to this consumer
     std::uint64_t frames_lost = 0;  // frames those markers accounted for
     std::uint64_t lingered = 0;     // batches that waited to coalesce
+    std::uint64_t echoes_sent = 0;
+    std::uint64_t echoes_returned = 0;
+    std::uint64_t echoes_lost = 0;  // never came back before the next was due
+    std::int64_t rtt_p50_ns = 0;
+    std::int64_t rtt_p99_ns = 0;
+    std::int64_t rtt_max_ns = 0;
     bool connected = false;
   };
 
   static std::unique_ptr<Egress> create(std::string name, ConsumerFeed& feed, std::uint16_t port,
-                                        Batching batching, std::string& error);
+                                        Tuning tuning, std::string& error);
 
   static std::unique_ptr<Egress> create(std::string name, ConsumerFeed& feed, std::uint16_t port,
                                         std::string& error) {
-    return create(std::move(name), feed, port, Batching{}, error);
+    return create(std::move(name), feed, port, Tuning{}, error);
   }
 
   ~Egress();
@@ -84,8 +110,13 @@ class Egress {
   [[nodiscard]] const std::string& name() const noexcept { return name_; }
 
  private:
-  Egress(std::string name, ConsumerFeed& feed, std::uint16_t port, Batching batching,
-         int listen_fd, int stop_fd);
+  Egress(std::string name, ConsumerFeed& feed, std::uint16_t port, Tuning tuning, int listen_fd,
+         int stop_fd);
+
+  // Injects a probe when one is due, and reads whatever the consumer has sent
+  // back. This is the only place the gateway reads from a consumer at all.
+  void maybe_send_echo();
+  void drain_replies();
 
   // Waits up to the linger budget for more frames, so one write carries more
   // than one frame. Returns the total now in `batch`.
@@ -110,7 +141,7 @@ class Egress {
   std::string name_;
   ConsumerFeed& feed_;
   std::uint16_t port_;
-  Batching batching_;
+  Tuning tuning_;
   int listen_fd_;
   int stop_fd_;
   int client_fd_ = -1;
@@ -142,6 +173,20 @@ class Egress {
   std::atomic<std::uint64_t> partial_writes_{0};
   std::atomic<std::uint64_t> connects_{0};
   std::atomic<std::uint64_t> disconnects_{0};
+  // Only one probe is outstanding at a time, which keeps the state a single
+  // entry instead of a map and makes a lost probe self-limiting.
+  std::uint64_t echo_nonce_ = 0;
+  std::uint64_t echo_sent_ns_ = 0;
+  bool echo_outstanding_ = false;
+  std::uint64_t next_echo_ns_ = 0;
+  std::vector<std::byte> reply_buf_;
+
+  mutable std::mutex rtt_mutex_;
+  Samples rtt_;
+
+  std::atomic<std::uint64_t> echoes_sent_{0};
+  std::atomic<std::uint64_t> echoes_returned_{0};
+  std::atomic<std::uint64_t> echoes_lost_{0};
   std::atomic<std::uint64_t> lingered_{0};
   std::atomic<std::uint64_t> gaps_sent_{0};
   std::atomic<std::uint64_t> frames_lost_{0};

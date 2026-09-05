@@ -40,6 +40,17 @@ class FrameStream {
 
   Status read_batch(std::vector<Frame>& out, int timeout_ms);
 
+  // Sends one record back to the gateway on the same connection.
+  //
+  // Used only to return echo probes. A reply that cannot be written immediately
+  // is dropped rather than waited on: blocking a consumer's read loop to answer
+  // a measurement probe would distort the very thing being measured, and a lost
+  // probe costs one sample. Returns false in that case, and `echo_drops()`
+  // counts them so a run with many of them is not mistaken for a clean one.
+  bool send_back(const Frame& f);
+
+  [[nodiscard]] std::uint64_t echo_drops() const noexcept { return echo_drops_; }
+
   [[nodiscard]] wire::DecodeError last_error() const noexcept { return last_error_; }
   [[nodiscard]] int fd() const noexcept { return fd_; }
 
@@ -58,6 +69,7 @@ class FrameStream {
   std::size_t need_ = wire::kHeaderSize;
   std::uint32_t records_ = 0;
   wire::DecodeError last_error_ = wire::DecodeError::kOk;
+  std::uint64_t echo_drops_ = 0;
 };
 
 }  // namespace etg

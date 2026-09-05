@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "frame.hpp"
+#include "gap_tracker.hpp"
 #include "wire.hpp"
 
 using namespace etg;
@@ -43,7 +44,7 @@ constexpr std::array<std::uint8_t, wire::kRecordSize> kGoldenRecord{
 
 constexpr std::array<std::uint8_t, wire::kHeaderSize> kGoldenHeader{
     0x45, 0x54, 0x47, 0x31,  // "ETG1"
-    0x02,                    // version: 2 since gap markers set a bit v1 rejected
+    0x03,                    // version: 3 since echo probes set a bit v2 rejected
     0x10,                    // header_len = 16
     0x28, 0x00,              // record_len = 40
     0x01, 0x00, 0x00, 0x00,  // count = 1
@@ -129,7 +130,7 @@ TEST_CASE("frame encode/decode round-trips over the edges of every field", "[wir
 TEST_CASE("a decoder rejects malformed records with a distinct reason", "[wire][errors]") {
   SECTION("a reserved flag bit is a version violation, not a warning") {
     auto bytes = as_bytes(kGoldenRecord);
-    bytes[30] = std::byte{0x10};  // bit 4, still reserved in v2
+    bytes[30] = std::byte{0x20};  // bit 5, still reserved in v3
     Frame f{};
     CHECK(wire::decode_frame(wire::ConstFrameBytes{bytes}, f) ==
           wire::DecodeError::kReservedFlagSet);
@@ -155,7 +156,7 @@ TEST_CASE("a decoder rejects malformed headers with a distinct reason", "[wire][
 
   SECTION("unsupported version") {
     auto bytes = as_bytes(kGoldenHeader);
-    bytes[4] = std::byte{0x03};
+    bytes[4] = std::byte{0x04};
     CHECK(wire::decode_header(wire::ConstHeaderBytes{bytes}, h) ==
           wire::DecodeError::kUnsupportedVersion);
   }
@@ -240,4 +241,60 @@ TEST_CASE("an ordinary frame is not mistaken for a gap", "[wire][gap]") {
   Frame f{};
   REQUIRE(wire::decode_frame(wire::ConstFrameBytes{bytes}, f) == wire::DecodeError::kOk);
   CHECK_FALSE(wire::is_gap(f));
+}
+
+TEST_CASE("an echo probe round-trips and is not mistaken for a frame", "[wire][echo]") {
+  const Frame echo = wire::make_echo(4242, 999'000);
+
+  std::array<std::byte, wire::kRecordSize> buf{};
+  wire::encode_frame(echo, wire::FrameBytes{buf});
+
+  Frame out{};
+  REQUIRE(wire::decode_frame(wire::ConstFrameBytes{buf}, out) == wire::DecodeError::kOk);
+
+  REQUIRE(wire::is_echo(out));
+  CHECK(wire::echo_nonce(out) == 4242);
+  CHECK(wire::echo_sent_ns(out) == 999'000);
+
+  // It must not look like anything else. The nonce lives in the sequence field,
+  // so a consumer that counted it as a frame would see the next real one as a
+  // jump of several thousand.
+  CHECK_FALSE(wire::is_gap(out));
+  CHECK(wire::is_control(out));
+  CHECK(out.len == 0);
+}
+
+TEST_CASE("a gap marker and a frame are both distinguishable from an echo", "[wire][echo]") {
+  const Frame gap = wire::make_gap(10, 5, GapReason::kConsumerOverrun, 0);
+  CHECK(wire::is_gap(gap));
+  CHECK_FALSE(wire::is_echo(gap));
+  CHECK(wire::is_control(gap));
+
+  const auto bytes = as_bytes(kGoldenRecord);
+  Frame f{};
+  REQUIRE(wire::decode_frame(wire::ConstFrameBytes{bytes}, f) == wire::DecodeError::kOk);
+  CHECK_FALSE(wire::is_echo(f));
+  CHECK_FALSE(wire::is_control(f));
+}
+
+TEST_CASE("an echo does not disturb a consumer's sequence accounting", "[echo][gap]") {
+  // The nonce shares a field with the sequence number, so a tracker that failed
+  // to skip echoes would report a colossal silent jump on the very next frame -
+  // and silent jumps are the signal that the gateway is losing data quietly.
+  GapTracker t;
+  Frame f{};
+  f.seq = 0;
+  t.observe(f);
+  f.seq = 1;
+  t.observe(f);
+
+  t.observe(wire::make_echo(9'000'000, 123));
+
+  f.seq = 2;
+  t.observe(f);
+
+  CHECK(t.stats().frames == 3);
+  CHECK(t.stats().echoes == 1);
+  CHECK(t.stats().silent_jumps == 0);
+  CHECK(t.total_lost() == 0);
 }

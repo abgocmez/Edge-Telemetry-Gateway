@@ -153,6 +153,10 @@ int main(int argc, char** argv) {
       }
 
       for (const etg::Frame& f : batch) {
+        if (etg::wire::is_echo(f)) {
+          static_cast<void>(stream->send_back(f));
+          continue;
+        }
         static_cast<void>(gaps.observe(f));
         static_cast<void>(monitor.observe(f));
       }

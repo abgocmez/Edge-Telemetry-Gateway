@@ -214,3 +214,43 @@ them is defensible; subtracting two undisciplined clocks is not.
 This is the outcome the scoping session argued about. `chrony` was chosen over
 RTT/2 for cross-machine work; the measurement says RTT/2 was the right call for
 this pair, and the reason has nothing to do with chrony itself.
+
+## Cross-machine latency, measured the way that works
+
+The one-way attempt failed for reasons recorded above: one host's clock was
+never disciplined, and the network path is four times the signal anyway. Wire
+version 3 adds an in-band round-trip probe instead. The gateway emits one
+periodically, the consumer returns it unchanged, and the gateway times it with
+its own clock from send to return — there is no second clock to disagree with.
+
+Gateway on the Pi, consumer on the development machine, 20 000 frames/s over
+wired Ethernet, 30 seconds:
+
+| | idle side-channel | in-band probe |
+|---|---|---|
+| RTT p50 | 518 µs | **524.6 µs** |
+| RTT p99 | 2294 µs | **25 460 µs** |
+| RTT max | 12 219 µs | **72 182 µs** |
+
+The two mechanisms share no code — one is a standalone Python TCP echo
+(`link-ceiling.py`), the other a C++ record travelling through the whole egress
+path — and their medians agree to within six microseconds. That agreement is
+the cross-check that neither is measuring something else.
+
+Their tails differ by a factor of eleven, and that difference is the finding. A
+probe on an idle socket measures the network. A probe queued behind real traffic,
+through the same batching and the same socket buffer, measures what a frame
+actually experiences. Reporting the first as if it were the second would
+understate the tail by an order of magnitude.
+
+The run itself: 608 174 frames delivered in 30 seconds at 20 272/s, zero loss,
+zero silent jumps, zero protocol errors, and 1414 of 1452 probes returned. The
+38 that did not were dropped by the consumer rather than waited on — answering a
+measurement probe must not block a consumer's read loop, because that would
+distort the thing being measured.
+
+**One-way p50 is therefore about 262 µs**, halved from the round trip, assuming
+a symmetric path and including the consumer's turnaround. The gateway's own
+contribution — 60–70 µs, measured locally in a single clock domain — is a small
+part of it. The two halves are measured separately and added, which is
+defensible; subtracting two clocks that disagree by 1.19 seconds is not.
