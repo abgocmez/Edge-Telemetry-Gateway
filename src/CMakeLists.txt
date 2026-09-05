@@ -22,3 +22,6 @@ target_link_libraries(etg-gen PRIVATE etg_core etg_warnings)
 
 add_executable(etg-probe probe_main.cpp)
 target_link_libraries(etg-probe PRIVATE etg_core etg_warnings)
+
+add_executable(etg-record record_main.cpp)
+target_link_libraries(etg-record PRIVATE etg_core etg_warnings)
