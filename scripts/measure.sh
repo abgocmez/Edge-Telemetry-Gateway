@@ -19,7 +19,11 @@
 # mixing in a loopback driver would only add a variable nobody asked about.
 set -uo pipefail
 
-cd "$(cd "$(dirname "$0")/.." && pwd)"
+# This script runs without set -e, because an individual experiment failing
+# should not abandon the rest of the suite. That makes an unchecked cd
+# dangerous rather than merely untidy: it would carry on in the wrong
+# directory and write results somewhere nobody looks.
+cd "$(cd "$(dirname "$0")/.." && pwd)" || exit 1
 
 BIN="${MEASURE_BIN:-build/src}"
 SECONDS_RUN="${MEASURE_SECONDS:-12}"
