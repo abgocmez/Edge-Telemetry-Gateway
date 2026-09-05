@@ -10,6 +10,7 @@
 
 #include "egress.hpp"
 #include "feed.hpp"
+#include "gap_tracker.hpp"
 #include "frame_stream.hpp"
 #include "tcp.hpp"
 #include "wire.hpp"
@@ -334,4 +335,112 @@ TEST_CASE("a consumer that keeps up is sent no markers at all", "[egress][gap]")
   }
   CHECK(egress->stats().gaps_sent == 0);
   CHECK(egress->stats().frames_lost == 0);
+}
+
+TEST_CASE("a consumer that disappears and comes back is told it was away, not that it failed",
+          "[egress][gap][recovery]") {
+  // The restart case, which is not the same as the overrun case and must not be
+  // reported as one.
+  //
+  // A consumer that was killed did not lose anything it was entitled to - it did
+  // not exist. But it still has to be told there is a hole, because a recorder
+  // appending to a file must not leave an unexplained jump in it: a capture that
+  // silently skips is a recording that lies about what it contains, and nothing
+  // downstream can tell that apart from corruption.
+  //
+  // The queue is small on purpose. A consumer that comes back quickly enough
+  // loses nothing at all - the buffer simply held its frames - and no marker is
+  // sent because there is no hole to describe. The marker appears only once the
+  // outage outlasts the buffer, which is the honest condition for it.
+  QueueFeed feed{64};
+  std::string error;
+  auto egress = Egress::create("test", feed, 0, error);
+  REQUIRE(egress != nullptr);
+  egress->start();
+
+  const auto push = [&](std::uint64_t from, std::uint64_t to) {
+    std::vector<Frame> v;
+    for (std::uint64_t i = from; i < to; ++i) {
+      v.push_back(make_frame(i));
+    }
+    static_cast<void>(feed.queue().push_batch(std::span<const Frame>{v}));
+  };
+
+  {
+    auto stream = FrameStream::connect("127.0.0.1", egress->port(), error);
+    REQUIRE(stream != nullptr);
+    push(0, 50);
+    const std::vector<Frame> got = collect(*stream, 50, 5s);
+    REQUIRE(got.size() == 50);
+    for (const Frame& f : got) {
+      CHECK_FALSE(wire::is_gap(f));
+    }
+  }  // the consumer is killed here
+
+  // Wait for the gateway to notice, so the reconnect below is genuinely a new
+  // connection rather than the same one.
+  for (int i = 0; i < 100 && egress->stats().disconnects == 0; ++i) {
+    std::this_thread::sleep_for(20ms);
+  }
+  REQUIRE(egress->stats().disconnects >= 1);
+
+  // 400 frames go past while nobody is listening, into a 64-slot queue: most
+  // of them are overwritten and genuinely gone.
+  push(50, 450);
+
+  auto stream = FrameStream::connect("127.0.0.1", egress->port(), error);
+  REQUIRE(stream != nullptr);
+  push(450, 500);
+
+  std::vector<Frame> got;
+  std::vector<Frame> batch;
+  const auto until = std::chrono::steady_clock::now() + 5s;
+  while (got.empty() && std::chrono::steady_clock::now() < until) {
+    const FrameStream::Status st = stream->read_batch(batch, 100);
+    if (st == FrameStream::Status::kClosed || st == FrameStream::Status::kProtocolError) {
+      break;
+    }
+    got.insert(got.end(), batch.begin(), batch.end());
+  }
+  egress->stop();
+
+  REQUIRE_FALSE(got.empty());
+  REQUIRE(wire::is_gap(got.front()));
+
+  // Absent, not overrun. A cadence monitor suppresses both, but only one of them
+  // should ever be counted against the pipeline.
+  CHECK(wire::gap_reason(got.front()) == GapReason::kConsumerAbsent);
+  CHECK_FALSE(is_fault(GapReason::kConsumerAbsent));
+  CHECK(got.front().seq == 50);  // where this consumer's stream stopped
+
+  // The marker still names the hole exactly, so the file stays honest.
+  CHECK(got.front().seq + wire::gap_count(got.front()) == got[1].seq);
+
+  // Counted as a marker, but not charged to the pipeline as lost frames.
+  CHECK(egress->stats().gaps_sent == 1);
+  CHECK(egress->stats().frames_lost == 0);
+}
+
+TEST_CASE("an absence is a discontinuity but not loss, to a consumer", "[gap][recovery]") {
+  GapTracker t;
+  t.observe(make_frame(0));
+  t.observe(make_frame(1));
+
+  t.observe(wire::make_gap(2, 400, GapReason::kConsumerAbsent, 0));
+  t.observe(make_frame(402));
+
+  CHECK(t.stats().markers == 1);
+  CHECK(t.stats().absent_markers == 1);
+  CHECK(t.stats().absent_frames == 400);
+
+  // The 400 frames are accounted for and reported, and they are not loss: a
+  // consumer that was restarted has nothing to alarm about, and a drop rate
+  // that counted them would be inflated by every restart.
+  CHECK(t.stats().reported_lost == 0);
+  CHECK(t.total_lost() == 0);
+
+  // And the stream is picked up exactly where the marker said it would resume,
+  // so no silent jump is invented.
+  CHECK(t.stats().silent_jumps == 0);
+  CHECK(t.stats().frames == 3);
 }

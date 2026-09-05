@@ -36,6 +36,8 @@ class GapTracker {
     std::uint64_t silent_lost = 0;    // frames those jumps accounted for
     std::uint64_t overrun_markers = 0;
     std::uint64_t ingest_markers = 0;
+    std::uint64_t absent_markers = 0;   // this consumer was away; not a fault
+    std::uint64_t absent_frames = 0;
   };
 
   // Returns true if this was a real frame, false if it was a marker. Callers
@@ -44,12 +46,19 @@ class GapTracker {
   bool observe(const Frame& f) {
     if (wire::is_gap(f)) {
       const std::uint64_t n = wire::gap_count(f);
+      const GapReason reason = wire::gap_reason(f);
       ++s_.markers;
-      s_.reported_lost += n;
-      if (wire::gap_reason(f) == GapReason::kIngestLoss) {
+      if (reason == GapReason::kConsumerAbsent) {
+        // A discontinuity, not loss. Counting it as loss would make every
+        // restart look like a fault and quietly inflate every drop figure.
+        ++s_.absent_markers;
+        s_.absent_frames += n;
+      } else if (reason == GapReason::kIngestLoss) {
         ++s_.ingest_markers;
+        s_.reported_lost += n;
       } else {
         ++s_.overrun_markers;
+        s_.reported_lost += n;
       }
       // A marker names the first missing sequence and how many follow, so the
       // stream is expected to resume exactly here.

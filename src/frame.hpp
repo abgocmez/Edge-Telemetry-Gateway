@@ -28,7 +28,19 @@ inline constexpr std::uint8_t kReservedMask = 0xF0U;   // bits 4-7
 enum class GapReason : std::uint8_t {
   kConsumerOverrun = 0,  // this consumer fell behind and was overwritten
   kIngestLoss = 1,       // the kernel dropped them; nobody ever had them
+  kConsumerAbsent = 2,   // this consumer was disconnected while these went past
 };
+
+// Whether a gap is something the consumer should treat as a fault.
+//
+// An absence is a discontinuity but not a failure: a consumer that was
+// restarted did not lose anything it was entitled to. It still has to be told,
+// because a recorder writing to a file must not leave an unexplained hole in
+// it - a capture that silently skips is a recording that lies about what it
+// contains, and a reader has no way to distinguish it from corruption.
+[[nodiscard]] constexpr bool is_fault(GapReason r) noexcept {
+  return r != GapReason::kConsumerAbsent;
+}
 
 // One normalised bus frame. Fixed size, trivially copyable, no indirection: it
 // is copied straight into a ring slot, so nothing here may own memory.

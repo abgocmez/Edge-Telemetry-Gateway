@@ -106,13 +106,32 @@ A record with `GAP` set is not a frame. It reports loss:
 |---|---|
 | `seq` | the first sequence this consumer did **not** receive |
 | `data` | u64, little-endian: how many frames are missing |
-| `src_id` | the reason, **not** a bus number: `0` consumer overrun, `1` ingest loss |
+| `src_id` | the reason, **not** a bus number. See the table below |
 | `t_ingest_ns` | when the gateway emitted the marker |
 | `t_kernel_ns` | `0`; a marker was never on a bus |
 | `can_id`, `len`, `flags` | `0`, `8`, `GAP` |
 
 The next real frame therefore has sequence `seq + count`, so a consumer can
 close its books without guessing where the stream resumes.
+
+### Reasons
+
+| `src_id` | Reason | A fault? |
+|---|---|---|
+| 0 | `consumer_overrun` — this consumer fell behind and was overwritten | yes |
+| 1 | `ingest_loss` — the kernel dropped them; nobody ever had them | yes |
+| 2 | `consumer_absent` — this consumer was disconnected while these went past | **no** |
+
+The third is a discontinuity rather than a failure, and conflating it with the
+other two would make every restart look like a fault and inflate every drop
+figure that is ever quoted. It is still reported, because a recorder appending
+to a file must not leave an unexplained jump in it: a capture that silently
+skips is a recording that lies about what it contains, and no reader can
+distinguish that from corruption.
+
+A consumer that reconnects fast enough receives no marker at all — its frames
+were simply waiting in the buffer, and there is no hole to describe. The marker
+appears only once the outage outlasts the buffer.
 
 **Markers are emitted by the gateway, not inferred by the consumer**, because
 only the gateway can say *why*. A consumer can see that sequences 100 to 149

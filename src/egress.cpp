@@ -105,7 +105,7 @@ void Egress::drop_client() {
     client_fd_ = -1;
     pending_.clear();
     pending_offset_ = 0;
-    have_seq_ = false;
+    reconnected_ = true;
     connected_.store(false, std::memory_order_relaxed);
     disconnects_.fetch_add(1, std::memory_order_relaxed);
   }
@@ -173,11 +173,19 @@ void Egress::note_gap(std::span<const Frame> frames) {
 
   if (have_seq_ && frames.front().seq > next_seq_) {
     const std::uint64_t missing = frames.front().seq - next_seq_;
-    outgoing_.push_back(wire::make_gap(next_seq_, missing, GapReason::kConsumerOverrun,
-                                       monotonic_ns()));
+    // The first gap after a reconnect is an absence, not an overrun: this
+    // consumer was not there to fall behind. Everything downstream depends on
+    // the difference - a cadence monitor suppresses both, but only one of them
+    // should ever be counted against the pipeline.
+    const GapReason reason =
+        reconnected_ ? GapReason::kConsumerAbsent : GapReason::kConsumerOverrun;
+    outgoing_.push_back(wire::make_gap(next_seq_, missing, reason, monotonic_ns()));
     gaps_sent_.fetch_add(1, std::memory_order_relaxed);
-    frames_lost_.fetch_add(missing, std::memory_order_relaxed);
+    if (is_fault(reason)) {
+      frames_lost_.fetch_add(missing, std::memory_order_relaxed);
+    }
   }
+  reconnected_ = false;
 
   outgoing_.insert(outgoing_.end(), frames.begin(), frames.end());
   next_seq_ = frames.back().seq + 1;

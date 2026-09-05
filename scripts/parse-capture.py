@@ -97,7 +97,8 @@ def parse_record(buf):
         # the payload is how many are missing, and src_id is the reason rather
         # than a bus number.
         rec["gap_count"] = int.from_bytes(data, "little")
-        rec["gap_reason"] = "consumer_overrun" if src_id == 0 else "ingest_loss"
+        rec["gap_reason"] = {0: "consumer_overrun", 1: "ingest_loss",
+                             2: "consumer_absent"}.get(src_id, f"unknown({src_id})")
     return rec
 
 

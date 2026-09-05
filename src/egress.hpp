@@ -95,11 +95,15 @@ class Egress {
   // the hot path.
   std::vector<Frame> outgoing_;
 
-  // Reset on disconnect: a consumer that reconnects and finds the stream has
-  // moved on did not "lose" anything, it simply was not there. Reporting that
-  // as loss would make every restart look like a fault.
+  // Deliberately *not* reset on disconnect. A consumer that reconnects and
+  // finds the stream has moved on did not lose anything it was entitled to, but
+  // it still needs to be told there is a hole - a recorder appending to a file
+  // must not leave an unexplained jump in it. So the position is remembered
+  // across the outage and the gap is reported with a reason that says "you were
+  // away" rather than "you were too slow".
   std::uint64_t next_seq_ = 0;
   bool have_seq_ = false;
+  bool reconnected_ = false;
 
   std::thread thread_;
   bool started_ = false;

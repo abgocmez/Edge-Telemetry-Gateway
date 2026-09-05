@@ -252,6 +252,7 @@ int main(int argc, char** argv) {
                "frames        %llu in %.3fs = %.1f/s\n"
                "batches       %llu (mean %.1f frames/batch)\n"
                "markers       %llu  (%llu frames, gateway-reported)\n"
+               "absent        %llu  (%llu frames passed while disconnected)\n"
                "silent jumps  %llu  (%llu frames, no marker: a protocol fault)\n"
                "connections   %llu\n"
                "protocol_errs %llu\n"
@@ -264,6 +265,8 @@ int main(int argc, char** argv) {
                batches > 0 ? static_cast<double>(frames) / static_cast<double>(batches) : 0.0,
                static_cast<unsigned long long>(gaps.stats().markers),
                static_cast<unsigned long long>(gaps.stats().reported_lost),
+               static_cast<unsigned long long>(gaps.stats().absent_markers),
+               static_cast<unsigned long long>(gaps.stats().absent_frames),
                static_cast<unsigned long long>(gaps.stats().silent_jumps),
                static_cast<unsigned long long>(gaps.stats().silent_lost),
                static_cast<unsigned long long>(reconnects),
