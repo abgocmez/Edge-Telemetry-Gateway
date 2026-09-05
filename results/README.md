@@ -254,3 +254,74 @@ a symmetric path and including the consumer's turnaround. The gateway's own
 contribution — 60–70 µs, measured locally in a single clock domain — is a small
 part of it. The two halves are measured separately and added, which is
 defensible; subtracting two clocks that disagree by 1.19 seconds is not.
+
+## Does SCHED_FIFO help a pipeline the way it helped a periodic loop?
+
+The supervisor gained roughly 570x lower p99 tick jitter from SCHED_FIFO,
+`mlockall` and an isolated core. That was a single-threaded loop whose whole job
+was to wake on a 10 ms timer, so being scheduled late *was* the error. This
+pipeline is a different shape, and the question is worth measuring rather than
+assuming in either direction.
+
+Three arms at 20 000 frames/s on the ring, `./scripts/measure.sh sched`. The two
+loaded arms run one busy loop per core at ordinary priority; without contention
+every policy looks identical and the experiment answers nothing. Median of three
+runs per percentile, microseconds:
+
+| arm | p50 | p90 | p99 | p99.9 | max |
+|---|---|---|---|---|---|
+| idle, `SCHED_OTHER` | 126.4 | 213.3 | 1 800.8 | 17 227.6 | 21 926.8 |
+| loaded, `SCHED_OTHER` | 227.0 | 2 397.4 | **25 608.5** | 49 548.2 | 55 234.2 |
+| loaded, `SCHED_FIFO` 20 | 124.1 | 177.1 | **2 427.2** | 17 992.5 | 24 000.5 |
+
+No frames were lost in any arm of any run.
+
+Contention costs 14x at p99. `SCHED_FIFO` gives back 10.6x of it, and restores
+p50 and p90 completely — a loaded pipeline at real-time priority has a *lower*
+p90 than an idle one at ordinary priority, 177 µs against 213 µs. That inversion
+is not noise and not a win: the governor is `ondemand`, so on an idle board it
+drops the clock and lets cores enter idle states, and every wake-up then pays to
+come back. The busy loops hold the frequency up. Load helps the median exactly
+because the board is otherwise busy standing down.
+
+### What it does not fix
+
+p99.9 and max barely move: 17 993 µs and 24 001 µs under `SCHED_FIFO` against
+17 228 µs and 21 927 µs idle. Whatever produces those is not CPU contention,
+because removing the contention does not remove them and neither does
+out-prioritising it. The obvious suspect is that nothing here calls `mlockall`,
+which the supervisor did — an RT thread that takes a page fault waits for the
+kernel regardless of its priority. That is the next thing to test, and until it
+is tested it stays a hypothesis rather than an explanation.
+
+So the honest summary is narrower than the supervisor's headline: `SCHED_FIFO`
+protects the *body* of the distribution under contention and does nothing for
+its extreme tail.
+
+### The more useful finding is the spread
+
+Across the three runs, the real-time arm reproduces almost exactly — p50 within
+0.1 µs, p90 within 1.0 µs, p99 within 140 µs. The contended ordinary arm does
+not: its p90 came out 327.8, 2 397.4 and 3 418.2 µs, a tenfold spread across
+identical runs, because which thread the scheduler starves is a different
+accident each time.
+
+For a failsafe runtime that is arguably the point. A tail that is ten times
+lower is worth having; a tail that is the *same number twice* is what makes a
+deadline something you can argue for.
+
+### Reading these numbers
+
+- Four busy loops were started, one per `nproc`, but `isolcpus=3` keeps core 3
+  out of the scheduler's reach and nothing here sets affinity. So four hogs and
+  the whole pipeline actually contended for three cores, and one core sat idle
+  throughout. The contention is therefore heavier than "one loop per core"
+  suggests.
+- The probe runs at the same priority as the gateway in every arm, so these
+  figures include the measuring instrument's own scheduling delay and bound the
+  pipeline from above rather than isolating it.
+- Nothing is pinned. One isolated core suits a single-threaded periodic loop;
+  confining several ingest and egress threads to one core would serialise work
+  meant to overlap.
+- `throttled=0x80000` (`soft-temp-limit-occurred`) is latched since boot, not a
+  statement about these runs; the die was at 54.8 °C.

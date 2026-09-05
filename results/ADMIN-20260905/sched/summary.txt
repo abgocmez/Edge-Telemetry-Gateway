@@ -1,0 +1,21 @@
+arm                     p50        p90        p99      p99.9        max       lost
+idle-other            125.1      213.0     1152.7    15581.5    21166.8          0
+loaded-other          252.0     3418.2    25608.5    50482.4    55234.2          0
+loaded-fifo           124.1      177.1     2311.3    17843.2    23617.3          0
+
+Microseconds, and frames lost. One busy loop per core at ordinary
+priority in the two loaded arms, so the scheduler has to choose between
+the pipeline and work that never yields.
+
+The gateway and the probe get the same policy in each arm. That is
+deliberate: the probe is the instrument, and promoting the gateway while
+leaving the probe at ordinary priority would measure how long the
+instrument waited to be run. It also means every figure here includes
+the probe scheduling delay, in every arm, and is an upper bound on what
+the pipeline itself contributes.
+
+No pinning. The supervisor isolcpus result came from a single-threaded
+periodic loop, which is exactly the shape one isolated core suits. This
+pipeline runs several ingest and egress threads, and confining them all
+to one core would serialise work meant to overlap: a different
+experiment, with a predictable and uninteresting answer.
