@@ -66,6 +66,24 @@ class Source {
 // CLOCK_REALTIME value from one of these.
 [[nodiscard]] std::uint64_t monotonic_ns() noexcept;
 
+// A consumer's latency sample is (its own CLOCK_MONOTONIC now) minus the
+// gateway's t_ingest_ns, and that is a delay only while both readings come from
+// the same clock. Run the consumer on a second machine and each clock counts
+// from its own boot, so the subtraction returns the difference in uptime
+// instead: measured between this project's Pi and its development machine, it
+// came to minus 3383 seconds. Rendered in microseconds, a dashboard would have
+// shown that as an authoritative-looking latency panel.
+//
+// Separating the two cases is cheap, because a delay is never negative and a
+// real one is never seconds long. A consumer that finds itself outside this
+// window is not slow, it is holding a different clock, and should say so rather
+// than publish the number.
+constexpr std::int64_t kMaxPlausibleLatencyNs = 10'000'000'000;
+
+[[nodiscard]] constexpr bool same_clock_domain(std::int64_t delay_ns) noexcept {
+  return delay_ns >= 0 && delay_ns <= kMaxPlausibleLatencyNs;
+}
+
 // CLOCK_REALTIME in nanoseconds. The domain chrony disciplines and the domain
 // SO_TIMESTAMPING reports in.
 [[nodiscard]] std::uint64_t realtime_ns() noexcept;

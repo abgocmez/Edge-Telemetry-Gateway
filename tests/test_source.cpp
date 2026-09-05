@@ -178,3 +178,23 @@ TEST_CASE("a CAN source reports an extended identifier as extended",
   CHECK(f.can_id == 0x1FFFFFFF);  // the flag bits must not leak into the id
   CHECK(f.len == 2);
 }
+
+// A consumer subtracting the gateway's ingest timestamp from its own clock gets
+// a delay only when both come from the same CLOCK_MONOTONIC. These are the two
+// readings that decide whether it may report the result at all.
+TEST_CASE("same_clock_domain accepts a plausible delay", "[clock]") {
+  CHECK(etg::same_clock_domain(0));
+  CHECK(etg::same_clock_domain(60'000));           // 60us, the local p50
+  CHECK(etg::same_clock_domain(300'000'000));      // 300ms, a badly stalled consumer
+  CHECK(etg::same_clock_domain(etg::kMaxPlausibleLatencyNs));
+}
+
+TEST_CASE("same_clock_domain rejects a second clock", "[clock]") {
+  // Negative: the consumer booted more recently than the gateway. This is the
+  // case actually measured across the Pi and the development machine.
+  CHECK_FALSE(etg::same_clock_domain(-3'383'000'000'000));
+  CHECK_FALSE(etg::same_clock_domain(-1));
+  // Positive but impossible: the gateway booted more recently.
+  CHECK_FALSE(etg::same_clock_domain(etg::kMaxPlausibleLatencyNs + 1));
+  CHECK_FALSE(etg::same_clock_domain(86'400'000'000'000));  // a day
+}

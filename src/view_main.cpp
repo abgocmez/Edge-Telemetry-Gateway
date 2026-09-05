@@ -43,6 +43,9 @@ constexpr std::size_t kRateWindow = 60;   // seconds of history kept
 constexpr std::size_t kRecentFrames = 40;
 constexpr std::size_t kMaxIds = 256;      // bound the id map against a fuzzed bus
 
+// Latency is only a delay while the gateway shares this machine's clock. The
+// test for that, and why it is needed, is etg::same_clock_domain in source.hpp.
+
 // A live view shows current behaviour, so latency here is a window over the
 // recent past rather than a lifetime aggregate.
 //
@@ -145,6 +148,7 @@ struct State {
   std::uint64_t frames_at_tick = 0;
 
   RollingLatency latency;
+  std::uint64_t off_domain = 0;  // samples rejected as not from this clock
   std::uint64_t started_ns = 0;
 };
 
@@ -187,9 +191,12 @@ std::string json_stats(State& st, std::uint16_t port) {
   out += buf;
 
   std::snprintf(buf, sizeof(buf),
-                "\"latency\":{\"n\":%llu,\"span_s\":%.1f,\"min\":%lld,\"p50\":%lld,\"p90\":%lld,"
+                "\"latency\":{\"n\":%llu,\"off_domain\":%llu,\"shared_clock\":%s,"
+                "\"span_s\":%.1f,\"min\":%lld,\"p50\":%lld,\"p90\":%lld,"
                 "\"p99\":%lld,\"p999\":%lld,\"max\":%lld},",
-                static_cast<unsigned long long>(p.count), st.latency.span_s(),
+                static_cast<unsigned long long>(p.count),
+                static_cast<unsigned long long>(st.off_domain),
+                st.off_domain > st.frames / 2 ? "false" : "true", st.latency.span_s(),
                 static_cast<long long>(p.min),
                 static_cast<long long>(p.p50), static_cast<long long>(p.p90),
                 static_cast<long long>(p.p99), static_cast<long long>(p.p999),
@@ -317,6 +324,7 @@ tr:last-child td{border-bottom:none}
 #tip .t{color:var(--muted);font-size:11px}
 #tip .b{font-weight:640;font-variant-numeric:tabular-nums}
 footer{margin-top:22px;color:var(--muted);font-size:12px}
+.note{margin:0;color:var(--ink-2);font-size:13px;max-width:62ch}
 </style></head><body>
 <div class="wrap">
   <header>
@@ -346,7 +354,11 @@ footer{margin-top:22px;color:var(--muted);font-size:12px}
 
   <div class="card" style="margin-bottom:12px">
     <h2>Consumer latency — ingest to here <span id="l-window" class="sub"></span></h2>
-    <div class="pcts">
+    <p id="l-note" class="note" hidden>Not measurable from here. The gateway is on
+      another machine, so its ingest timestamps and this clock count from different
+      boots and the difference between them is not a delay. Round-trip probes
+      measure the cross-machine path instead; see <span class="mono">--echo-ms</span>.</p>
+    <div class="pcts" id="l-pcts">
       <div class="pct"><div class="k">min</div><div class="v" id="l-min">–</div></div>
       <div class="pct"><div class="k">p50</div><div class="v" id="l-p50">–</div></div>
       <div class="pct"><div class="k">p90</div><div class="v" id="l-p90">–</div></div>
@@ -477,12 +489,17 @@ async function tick(){
   $("k-ids").textContent    = nf.format(d.ids.length);
 
   const L = d.latency;
-  $("l-window").textContent = L.n
+  $("l-window").textContent = L.n && L.shared_clock
     ? `· rolling ${L.span_s.toFixed(0)} s, ${nf.format(L.n)} frames`
     : "";
-  const set = (k,v) => $(k).textContent = L.n ? ns(v) : "–";
-  set("l-min",L.min); set("l-p50",L.p50); set("l-p90",L.p90);
-  set("l-p99",L.p99); set("l-p999",L.p999); set("l-max",L.max);
+  const shared = L.shared_clock;
+  $("l-pcts").hidden = !shared;
+  $("l-note").hidden = shared;
+  if (shared) {
+    const set = (k,v) => $(k).textContent = L.n ? ns(v) : "–";
+    set("l-min",L.min); set("l-p50",L.p50); set("l-p90",L.p90);
+    set("l-p99",L.p99); set("l-p999",L.p999); set("l-max",L.max);
+  }
 
   const ids = d.ids.slice().sort((a,b) => b.count - a.count);
   const top = Math.max(1, ...ids.map(i => i.count));
@@ -629,8 +646,13 @@ int main(int argc, char** argv) {
             state.have_seq = true;
             ++state.frames;
 
-            state.latency.add(now, static_cast<std::int64_t>(now) -
-                                       static_cast<std::int64_t>(f.t_ingest_ns));
+            const std::int64_t delay = static_cast<std::int64_t>(now) -
+                                       static_cast<std::int64_t>(f.t_ingest_ns);
+            if (!etg::same_clock_domain(delay)) {
+              ++state.off_domain;  // the gateway is not on this machine
+            } else {
+              state.latency.add(now, delay);
+            }
 
             // Bounded: a fuzzed or misconfigured bus can present every one of
             // 2^29 identifiers, and an unbounded map would be a slow memory
