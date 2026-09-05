@@ -1,0 +1,97 @@
+#pragma once
+
+#include <atomic>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "bounded_queue.hpp"
+#include "fanout.hpp"
+
+namespace etg {
+
+// One consumer's outbound path: its own queue, its own thread, its own TCP
+// port, one connected client at a time.
+//
+// A port per consumer rather than one port with many clients, because it makes
+// the mapping visible: this queue belongs to that consumer, and its drop count
+// is that consumer's loss and nobody else's.
+//
+// Back-pressure lives here and is real rather than simulated. Writes are
+// non-blocking, so a consumer that cannot keep up fills the kernel socket
+// buffer, the write returns EWOULDBLOCK, this thread stops draining, and the
+// queue overflows and drops - in that order. `would_block` is therefore the
+// direct measurement of back-pressure, not a proxy for it.
+//
+// While no client is connected the queue is deliberately left to fill and drop
+// rather than being drained and discarded. A consumer that reconnects then
+// receives the freshest frames available, and the drop counter tells it exactly
+// what it missed.
+class Egress {
+ public:
+  // Frames per wire batch. Larger batches amortise the write syscall and cost
+  // tail latency; this is the knob the M4 sweep turns.
+  static constexpr std::size_t kMaxBatch = 256;
+
+  struct Stats {
+    std::uint64_t frames_sent = 0;
+    std::uint64_t batches_sent = 0;
+    std::uint64_t bytes_sent = 0;
+    std::uint64_t would_block = 0;     // the back-pressure signal
+    std::uint64_t partial_writes = 0;  // a write that took only part of the buffer
+    std::uint64_t connects = 0;
+    std::uint64_t disconnects = 0;
+    bool connected = false;
+  };
+
+  static std::unique_ptr<Egress> create(std::string name, FrameQueue& queue, std::uint16_t port,
+                                        std::string& error);
+
+  ~Egress();
+
+  Egress(const Egress&) = delete;
+  Egress& operator=(const Egress&) = delete;
+
+  void start();
+  void stop();
+
+  [[nodiscard]] Stats stats() const noexcept;
+  [[nodiscard]] std::uint16_t port() const noexcept { return port_; }
+  [[nodiscard]] const std::string& name() const noexcept { return name_; }
+
+ private:
+  Egress(std::string name, FrameQueue& queue, std::uint16_t port, int listen_fd, int stop_fd);
+
+  void run();
+  bool wait_for_client();          // returns false when asked to stop
+  bool flush_pending();            // returns false when the client is gone
+  bool client_gone();              // peer closed, seen without writing to it
+  void encode_batch(std::span<const Frame> frames);
+  void drop_client();
+
+  std::string name_;
+  FrameQueue& queue_;
+  std::uint16_t port_;
+  int listen_fd_;
+  int stop_fd_;
+  int client_fd_ = -1;
+
+  std::vector<std::byte> pending_;
+  std::size_t pending_offset_ = 0;
+
+  std::thread thread_;
+  bool started_ = false;
+
+  std::atomic<std::uint64_t> frames_sent_{0};
+  std::atomic<std::uint64_t> batches_sent_{0};
+  std::atomic<std::uint64_t> bytes_sent_{0};
+  std::atomic<std::uint64_t> would_block_{0};
+  std::atomic<std::uint64_t> partial_writes_{0};
+  std::atomic<std::uint64_t> connects_{0};
+  std::atomic<std::uint64_t> disconnects_{0};
+  std::atomic<bool> connected_{false};
+};
+
+}  // namespace etg
