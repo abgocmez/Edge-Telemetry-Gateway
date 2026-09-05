@@ -450,8 +450,15 @@ TEST_CASE("producer collisions happen constantly, and the claim absorbs them",
   INFO("claim retries: " << ring.claim_retries());
   INFO("frames published: " << ring.write_position());
 
-  // The defended-against situation actually arose in this run.
-  CHECK(ring.claim_retries() > 0);
+  // The defended-against situation actually arose in this run - but only assert
+  // that where it is meant to. Under a sanitizer the volume is cut by two orders
+  // of magnitude and a low-core runner then publishes too few frames to collide
+  // at all: CI reported 2000 frames and zero retries, which is a correct
+  // outcome, not a regression. The non-vacuity claim belongs to the run that is
+  // supposed to be non-vacuous.
+  if constexpr (kStressDivisor == 1) {
+    CHECK(ring.claim_retries() > 0);
+  }
 
   // And not one of those collisions produced a frame made of two producers'
   // bytes. Remove the CAS in write_at and this is what eventually fails.
