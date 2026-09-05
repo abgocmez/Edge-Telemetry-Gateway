@@ -1,10 +1,13 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <span>
 #include <vector>
@@ -191,6 +194,7 @@ class BroadcastRing {
   std::uint64_t publish(const Frame& f) {
     const std::uint64_t pos = write_pos_.fetch_add(1, std::memory_order_relaxed);
     write_at(pos, f);
+    wake_readers();
     return pos;
   }
 
@@ -209,6 +213,9 @@ class BroadcastRing {
     for (std::size_t i = 0; i < frames.size(); ++i) {
       write_at(base + i, frames[i]);
     }
+    // Once per batch rather than once per frame: a parked reader only needs to
+    // be told that something arrived, not how much.
+    wake_readers();
     return base;
   }
 
@@ -283,6 +290,66 @@ class BroadcastRing {
     return c;
   }
 
+  // ---------------------------------------------------------------------
+  // Idle path
+  //
+  // The protocol above is lock-free and stays that way. What follows is not
+  // part of it: it is how a reader with nothing to do stops burning a core.
+  //
+  // A reader could simply spin, and on a busy feed it effectively does - the
+  // first try_read succeeds and none of this is reached. But a consumer polling
+  // an idle bus would spin for the whole of its poll timeout, which on a
+  // four-core Pi is a core wasted per idle consumer.
+  //
+  // The cost to a producer is one relaxed load per publish when nobody is
+  // parked, which is the shape that matters: the fast path pays almost nothing
+  // for a facility only the slow path uses. The mutex is touched by a producer
+  // only when a reader is actually waiting on it.
+
+  // Parks until the write position moves past `known`, or the timeout expires.
+  // Returns true if there may be new data. Spurious wakeups are fine; the caller
+  // re-checks by reading.
+  bool wait_for_data(std::uint64_t known, std::chrono::milliseconds timeout) const {
+    if (write_pos_.load(std::memory_order_acquire) > known) {
+      return true;
+    }
+    waiters_.fetch_add(1, std::memory_order_seq_cst);
+
+    // Re-check after registering. Without this, a publish that lands between the
+    // check above and the wait below would find waiters_ still zero, skip the
+    // notify, and leave this reader parked until the timeout - a lost wakeup on
+    // every quiet-to-busy transition.
+    if (write_pos_.load(std::memory_order_acquire) > known) {
+      waiters_.fetch_sub(1, std::memory_order_relaxed);
+      return true;
+    }
+
+    bool woken = false;
+    {
+      std::unique_lock<std::mutex> lock(idle_mutex_);
+      woken = idle_cv_.wait_for(lock, timeout, [this, known] {
+        return write_pos_.load(std::memory_order_acquire) > known || closed_;
+      });
+    }
+    waiters_.fetch_sub(1, std::memory_order_relaxed);
+    return woken;
+  }
+
+  // Wakes every parked reader and makes further waits return immediately, so
+  // shutdown does not have to wait out a timeout.
+  void close() {
+    {
+      const std::lock_guard<std::mutex> lock(idle_mutex_);
+      closed_ = true;
+    }
+    idle_cv_.notify_all();
+  }
+
+  [[nodiscard]] bool closed() const {
+    const std::lock_guard<std::mutex> lock(idle_mutex_);
+    return closed_;
+  }
+
  private:
   static std::size_t round_up_pow2(std::size_t v) {
     std::size_t p = 1;
@@ -341,6 +408,15 @@ class BroadcastRing {
     cell.seq.store(2 * pos + 2, std::memory_order_release);
   }
 
+  // The whole cost of the idle path on the fast path: one relaxed load. The
+  // mutex is only taken when a reader is genuinely parked on it.
+  void wake_readers() const {
+    if (waiters_.load(std::memory_order_seq_cst) == 0) {
+      return;
+    }
+    idle_cv_.notify_all();
+  }
+
   static void spin() noexcept {
 #if defined(__x86_64__) || defined(__i386__)
     __builtin_ia32_pause();
@@ -358,6 +434,12 @@ class BroadcastRing {
 
   // Diagnostic only, never read by the protocol, so relaxed throughout.
   std::atomic<std::uint64_t> claim_retries_{0};
+
+  // Idle-path only. None of this participates in the lock-free protocol.
+  mutable std::atomic<std::uint32_t> waiters_{0};
+  mutable std::mutex idle_mutex_;
+  mutable std::condition_variable idle_cv_;
+  bool closed_ = false;
 
   std::vector<Cell> cells_;
 };

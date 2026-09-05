@@ -6,6 +6,7 @@ add_library(etg_core STATIC
   synthetic_source.cpp
   samples.cpp
   fanout.cpp
+  ring_ingest.cpp
   tcp.cpp
   egress.cpp
   frame_stream.cpp

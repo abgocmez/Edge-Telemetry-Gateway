@@ -21,7 +21,7 @@ constexpr std::chrono::milliseconds kPopTimeout{50};
 
 }  // namespace
 
-std::unique_ptr<Egress> Egress::create(std::string name, FrameQueue& queue, std::uint16_t port,
+std::unique_ptr<Egress> Egress::create(std::string name, ConsumerFeed& feed, std::uint16_t port,
                                        std::string& error) {
   const int listen_fd = tcp::listen_on(port, error);
   if (listen_fd < 0) {
@@ -38,11 +38,11 @@ std::unique_ptr<Egress> Egress::create(std::string name, FrameQueue& queue, std:
   // Port 0 means the kernel picked one; report what it actually chose.
   const std::uint16_t bound = tcp::local_port(listen_fd);
   return std::unique_ptr<Egress>{
-      new Egress(std::move(name), queue, bound != 0 ? bound : port, listen_fd, stop_fd)};
+      new Egress(std::move(name), feed, bound != 0 ? bound : port, listen_fd, stop_fd)};
 }
 
-Egress::Egress(std::string name, FrameQueue& queue, std::uint16_t port, int listen_fd, int stop_fd)
-    : name_(std::move(name)), queue_(queue), port_(port), listen_fd_(listen_fd), stop_fd_(stop_fd) {
+Egress::Egress(std::string name, ConsumerFeed& feed, std::uint16_t port, int listen_fd, int stop_fd)
+    : name_(std::move(name)), feed_(feed), port_(port), listen_fd_(listen_fd), stop_fd_(stop_fd) {
   pending_.reserve(wire::kHeaderSize + kMaxBatch * wire::kRecordSize);
 }
 
@@ -75,9 +75,9 @@ void Egress::stop() {
   // counter, and the thread is woken by the queue close either way.
   const ssize_t written = ::write(stop_fd_, &one, sizeof(one));
   static_cast<void>(written);
-  // Also wake a thread parked in pop_batch on the condition variable; the
-  // eventfd alone only covers the poll paths.
-  queue_.close();
+  // Also wake a thread parked in pop_batch; the eventfd alone only covers the
+  // poll paths, and the feed has its own idle mechanism whichever topology it is.
+  feed_.close();
   if (thread_.joinable()) {
     thread_.join();
   }
@@ -229,9 +229,9 @@ void Egress::run() {
       continue;
     }
 
-    const std::size_t n = queue_.pop_batch(std::span<Frame>{batch}, kPopTimeout);
+    const std::size_t n = feed_.pop_batch(std::span<Frame>{batch}, kPopTimeout);
     if (n == 0) {
-      if (queue_.closed()) {
+      if (feed_.closed()) {
         return;
       }
       continue;

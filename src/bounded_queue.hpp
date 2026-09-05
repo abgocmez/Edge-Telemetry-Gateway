@@ -8,6 +8,8 @@
 #include <span>
 #include <vector>
 
+#include "frame.hpp"
+
 namespace etg {
 
 struct QueueStats {
@@ -139,5 +141,10 @@ class BoundedQueue {
   std::atomic<std::uint64_t> popped_{0};
   std::atomic<std::uint64_t> dropped_{0};
 };
+
+// The queue this project actually instantiates. Declared beside the template
+// rather than beside one of its users, so both topologies can name it without
+// either having to include the other.
+using FrameQueue = BoundedQueue<Frame>;
 
 }  // namespace etg

@@ -7,8 +7,7 @@
 #include <thread>
 #include <vector>
 
-#include "bounded_queue.hpp"
-#include "fanout.hpp"
+#include "feed.hpp"
 
 namespace etg {
 
@@ -46,7 +45,7 @@ class Egress {
     bool connected = false;
   };
 
-  static std::unique_ptr<Egress> create(std::string name, FrameQueue& queue, std::uint16_t port,
+  static std::unique_ptr<Egress> create(std::string name, ConsumerFeed& feed, std::uint16_t port,
                                         std::string& error);
 
   ~Egress();
@@ -62,7 +61,7 @@ class Egress {
   [[nodiscard]] const std::string& name() const noexcept { return name_; }
 
  private:
-  Egress(std::string name, FrameQueue& queue, std::uint16_t port, int listen_fd, int stop_fd);
+  Egress(std::string name, ConsumerFeed& feed, std::uint16_t port, int listen_fd, int stop_fd);
 
   void run();
   bool wait_for_client();          // returns false when asked to stop
@@ -72,7 +71,7 @@ class Egress {
   void drop_client();
 
   std::string name_;
-  FrameQueue& queue_;
+  ConsumerFeed& feed_;
   std::uint16_t port_;
   int listen_fd_;
   int stop_fd_;

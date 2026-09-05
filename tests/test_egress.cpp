@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "egress.hpp"
+#include "feed.hpp"
 #include "frame_stream.hpp"
 #include "tcp.hpp"
 #include "wire.hpp"
@@ -49,9 +50,9 @@ std::vector<Frame> collect(FrameStream& s, std::size_t want, std::chrono::millis
 }  // namespace
 
 TEST_CASE("frames survive the round trip over a real socket", "[egress][wire]") {
-  FrameQueue q{4096};
+  QueueFeed feed{4096};
   std::string error;
-  auto egress = Egress::create("test", q, 0, error);  // port 0: kernel picks
+  auto egress = Egress::create("test", feed, 0, error);  // port 0: kernel picks
   REQUIRE(egress != nullptr);
   REQUIRE(egress->port() != 0);
   egress->start();
@@ -64,7 +65,7 @@ TEST_CASE("frames survive the round trip over a real socket", "[egress][wire]") 
   for (std::uint64_t i = 0; i < 500; ++i) {
     sent.push_back(make_frame(i));
   }
-  static_cast<void>(q.push_batch(std::span<const Frame>{sent}));
+  static_cast<void>(feed.queue().push_batch(std::span<const Frame>{sent}));
 
   const std::vector<Frame> got = collect(*stream, sent.size(), 5s);
   REQUIRE(got.size() == sent.size());
@@ -181,9 +182,9 @@ TEST_CASE("a stream of garbage is a protocol error, not a crash", "[wire][stream
 
 TEST_CASE("a consumer that leaves is noticed, and the queue keeps its place",
           "[egress][failure]") {
-  FrameQueue q{64};
+  QueueFeed feed{64};
   std::string error;
-  auto egress = Egress::create("test", q, 0, error);
+  auto egress = Egress::create("test", feed, 0, error);
   REQUIRE(egress != nullptr);
   egress->start();
 
@@ -195,7 +196,7 @@ TEST_CASE("a consumer that leaves is noticed, and the queue keeps its place",
     for (std::uint64_t i = 0; i < 10; ++i) {
       first.push_back(make_frame(i));
     }
-    static_cast<void>(q.push_batch(std::span<const Frame>{first}));
+    static_cast<void>(feed.queue().push_batch(std::span<const Frame>{first}));
     const std::vector<Frame> got = collect(*stream, first.size(), 5s);
     REQUIRE(got.size() == first.size());
   }  // consumer disappears here
@@ -207,7 +208,7 @@ TEST_CASE("a consumer that leaves is noticed, and the queue keeps its place",
   for (std::uint64_t i = 10; i < 500; ++i) {
     during.push_back(make_frame(i));
   }
-  static_cast<void>(q.push_batch(std::span<const Frame>{during}));
+  static_cast<void>(feed.queue().push_batch(std::span<const Frame>{during}));
 
   bool saw_disconnect = false;
   for (int i = 0; i < 100 && !saw_disconnect; ++i) {
@@ -215,15 +216,15 @@ TEST_CASE("a consumer that leaves is noticed, and the queue keeps its place",
     std::this_thread::sleep_for(20ms);
   }
   CHECK(saw_disconnect);
-  CHECK(q.stats().dropped > 0);
+  CHECK(feed.stats().dropped > 0);
 
   egress->stop();
 }
 
 TEST_CASE("egress starts disconnected and stop is idempotent", "[egress]") {
-  FrameQueue q{64};
+  QueueFeed feed{64};
   std::string error;
-  auto egress = Egress::create("test", q, 0, error);
+  auto egress = Egress::create("test", feed, 0, error);
   REQUIRE(egress != nullptr);
 
   CHECK_FALSE(egress->stats().connected);
