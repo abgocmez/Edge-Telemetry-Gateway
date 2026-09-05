@@ -118,3 +118,33 @@ jobs:
 
       - name: Compose smoke
         run: ./scripts/smoke-compose.sh
+
+  # Shell scripts are load-bearing here - they set up vcan, drive the smoke
+  # tests and check the Pi - but nothing else in CI parses them, so a syntax
+  # error only shows up as a confusing runtime failure inside another job.
+  # Both of today's script breakages were of exactly that shape.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Shell syntax
+        run: |
+          for f in scripts/*.sh; do
+            echo "checking $f"
+            bash -n "$f"
+          done
+
+      - name: Shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          shellcheck --severity=warning scripts/*.sh
+
+      - name: Python syntax
+        run: python3 -m py_compile scripts/*.py
+
+      - name: Compose files parse, both variants
+        run: |
+          docker compose config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.vcan.yml             --profile vcan config --quiet
