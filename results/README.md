@@ -263,52 +263,68 @@ was to wake on a 10 ms timer, so being scheduled late *was* the error. This
 pipeline is a different shape, and the question is worth measuring rather than
 assuming in either direction.
 
-Three arms at 20 000 frames/s on the ring, `./scripts/measure.sh sched`. The two
+Four arms at 20 000 frames/s on the ring, `./scripts/measure.sh sched`. The three
 loaded arms run one busy loop per core at ordinary priority; without contention
 every policy looks identical and the experiment answers nothing. Median of three
 runs per percentile, microseconds:
 
 | arm | p50 | p90 | p99 | p99.9 | max |
 |---|---|---|---|---|---|
-| idle, `SCHED_OTHER` | 126.4 | 213.3 | 1 800.8 | 17 227.6 | 21 926.8 |
-| loaded, `SCHED_OTHER` | 227.0 | 2 397.4 | **25 608.5** | 49 548.2 | 55 234.2 |
-| loaded, `SCHED_FIFO` 20 | 124.1 | 177.1 | **2 427.2** | 17 992.5 | 24 000.5 |
+| idle, `SCHED_OTHER` | 126.5 | 223.4 | 2 439.8 | 18 022.8 | 24 105.7 |
+| loaded, `SCHED_OTHER` | 250.9 | 3 356.5 | **24 234.5** | 48 825.7 | 57 407.1 |
+| loaded, `SCHED_FIFO` 20 | 124.1 | 178.1 | **2 419.2** | 18 193.8 | 23 952.8 |
+| loaded, `SCHED_FIFO` + `mlockall` | 124.1 | 220.5 | 2 601.1 | 18 144.0 | 24 109.5 |
 
 No frames were lost in any arm of any run.
 
-Contention costs 14x at p99. `SCHED_FIFO` gives back 10.6x of it, and restores
-p50 and p90 completely — a loaded pipeline at real-time priority has a *lower*
-p90 than an idle one at ordinary priority, 177 µs against 213 µs. That inversion
-is not noise and not a win: the governor is `ondemand`, so on an idle board it
-drops the clock and lets cores enter idle states, and every wake-up then pays to
-come back. The busy loops hold the frequency up. Load helps the median exactly
-because the board is otherwise busy standing down.
+Contention costs roughly 10x at p99. `SCHED_FIFO` gives all of it back and
+restores p50 and p90 outright — a loaded pipeline at real-time priority has a
+*lower* p90 than an idle one at ordinary priority, 178 µs against 223 µs. That
+inversion is not noise and not a win: the governor is `ondemand`, so on an idle
+board it drops the clock and lets cores enter idle states, and every wake-up then
+pays to come back. The busy loops hold the frequency up. Load helps the median
+exactly because the board is otherwise busy standing down.
 
-### What it does not fix
+### What it does not fix, and why
 
-p99.9 and max barely move: 17 993 µs and 24 001 µs under `SCHED_FIFO` against
-17 228 µs and 21 927 µs idle. Whatever produces those is not CPU contention,
-because removing the contention does not remove them and neither does
-out-prioritising it. The obvious suspect is that nothing here calls `mlockall`,
-which the supervisor did — an RT thread that takes a page fault waits for the
-kernel regardless of its priority. That is the next thing to test, and until it
-is tested it stays a hypothesis rather than an explanation.
+p99.9 and max do not move at all: about 18 ms and 24 ms in every arm, contended
+or not, promoted or not.
 
-So the honest summary is narrower than the supervisor's headline: `SCHED_FIFO`
-protects the *body* of the distribution under contention and does nothing for
-its extreme tail.
+The first hypothesis was paging. Nothing here called `mlockall`, the supervisor
+did, and an RT thread that takes a page fault waits for the kernel whatever its
+priority. The fourth arm exists to test that, and it refutes it — `mlockall`
+changed p99.9 by less than the run-to-run noise, three times over.
+
+The rate sweep in the first table above answers it instead. The same extreme
+tail is not a fixed cost at all:
+
+| offered rate | p99.9 | max |
+|---|---|---|
+| 2 000/s | 172.6 µs | 915.6 µs |
+| 20 000/s | 12 644.9 µs | 17 741.6 µs |
+| 100 000/s | 110 755.7 µs | 116 617.2 µs |
+
+It scales with offered load, and it is the same in both topologies, so it is
+neither the scheduler nor the ring. At 20 000 frames/s this board is close
+enough to its service capacity that a transient burst builds a backlog, and the
+frames behind it wait for the backlog to drain. Priority decides who runs first;
+it cannot create throughput that is not there.
+
+So the honest summary is narrower than the supervisor's headline. `SCHED_FIFO`
+protects the body of the distribution from *competing work*, which is what it is
+for. It does nothing about a queue you built yourself by offering more than the
+machine can serve, and no scheduling policy will.
 
 ### The more useful finding is the spread
 
-Across the three runs, the real-time arm reproduces almost exactly — p50 within
-0.1 µs, p90 within 1.0 µs, p99 within 140 µs. The contended ordinary arm does
-not: its p90 came out 327.8, 2 397.4 and 3 418.2 µs, a tenfold spread across
-identical runs, because which thread the scheduler starves is a different
-accident each time.
+Across all six runs of the real-time arm, p50 landed between 124.0 and 124.1 µs
+and p99 between 2 311 and 2 771 µs. p90 was 176.3–178.1 µs in five of the six
+and 220.7 µs in the sixth. The contended ordinary arm, over the same six runs,
+produced p90 of 327.8, 2 397.4, 3 418.2, 3 361.6, 3 356.5 and 3 297.4 µs.
 
-For a failsafe runtime that is arguably the point. A tail that is ten times
-lower is worth having; a tail that is the *same number twice* is what makes a
-deadline something you can argue for.
+For a failsafe runtime that spread is arguably the point. A tail ten times lower
+is worth having; a tail that is the same number twice is what makes a deadline
+something you can argue for.
 
 ### Reading these numbers
 

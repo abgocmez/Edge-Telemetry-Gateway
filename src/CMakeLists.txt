@@ -2,6 +2,7 @@ add_library(etg_core STATIC
   version.cpp
   wire.cpp
   clock.cpp
+  rt.cpp
   can_source.cpp
   synthetic_source.cpp
   samples.cpp

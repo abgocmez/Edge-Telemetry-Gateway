@@ -34,6 +34,7 @@
 
 #include "frame_stream.hpp"
 #include "gap_tracker.hpp"
+#include "rt.hpp"
 #include "samples.hpp"
 #include "source.hpp"
 #include "version.hpp"
@@ -67,7 +68,9 @@ void usage() {
                "                   disciplined first - chronyc sources, and look for\n"
                "                   a non-zero Reach - or this reports the offset\n"
                "                   between two clocks rather than a latency\n"
-               "  --csv PATH       write every retained gateway-latency sample\n",
+               "  --csv PATH       write every retained gateway-latency sample\n"
+               "  --mlock          lock the process into RAM, so a page fault\n"
+               "                   cannot stall the instrument itself\n",
                etg::version().data());
 }
 
@@ -100,6 +103,7 @@ void report(const char* label, const etg::Samples& s) {
 int main(int argc, char** argv) {
   std::string host = "127.0.0.1";
   std::string csv_path;
+  bool mlock = false;
   std::uint16_t port = 9001;
   int seconds = 0;
   bool reconnect = false;
@@ -121,6 +125,8 @@ int main(int argc, char** argv) {
       warmup = std::atoi(argv[++i]);
     } else if (arg == "--stall-us" && has_value) {
       stall_us = std::atoi(argv[++i]);
+    } else if (arg == "--mlock") {
+      mlock = true;
     } else if (arg == "--csv" && has_value) {
       csv_path = argv[++i];
     } else if (arg == "--reconnect") {
@@ -136,6 +142,17 @@ int main(int argc, char** argv) {
       std::fprintf(stderr, "unknown or incomplete argument: %s\n\n", arg.c_str());
       usage();
       return 2;
+    }
+  }
+
+  if (mlock) {
+    std::string mlock_error;
+    if (!etg::rt::lock_memory(mlock_error)) {
+      // Asked for residency and did not get it. Carrying on would report
+      // the same numbers as a run that had it, which is the one outcome
+      // worth avoiding.
+      std::fprintf(stderr, "%s\n", mlock_error.c_str());
+      return 1;
     }
   }
 

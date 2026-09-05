@@ -33,6 +33,7 @@
 #include "fanout.hpp"
 #include "feed.hpp"
 #include "ring_ingest.hpp"
+#include "rt.hpp"
 #include "source.hpp"
 #include "synthetic_source.hpp"
 #include "version.hpp"
@@ -65,7 +66,10 @@ void usage() {
                "                         consumer - unlike one-way latency\n"
                "  --rate N               synthetic source rate in frames/s (default 1000)\n"
                "  --seconds N            run for N seconds (0 = until interrupted)\n"
-               "  --tap                  print every frame; only useful at low rates\n",
+               "  --tap                  print every frame; only useful at low rates\n"
+               "  --mlock                lock the process into RAM. Priority decides\n"
+               "                         who runs, not who is resident, and a page\n"
+               "                         fault stalls an RT thread all the same\n",
                etg::version().data());
 }
 
@@ -117,6 +121,7 @@ int main(int argc, char** argv) {
   std::uint32_t rate = 1000;
   int seconds = 0;
   bool tap = false;
+  bool mlock = false;
 
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -144,6 +149,8 @@ int main(int argc, char** argv) {
       rate = static_cast<std::uint32_t>(std::strtoul(argv[++i], nullptr, 10));
     } else if (arg == "--seconds" && has_value) {
       seconds = std::atoi(argv[++i]);
+    } else if (arg == "--mlock") {
+      mlock = true;
     } else if (arg == "--tap") {
       tap = true;
     } else if (arg == "--help" || arg == "-h") {
@@ -172,6 +179,17 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "no consumers and no --tap: nothing to do\n\n");
     usage();
     return 2;
+  }
+
+  if (mlock) {
+    std::string mlock_error;
+    if (!etg::rt::lock_memory(mlock_error)) {
+      // Asked for residency and did not get it. Carrying on would report
+      // the same numbers as a run that had it, which is the one outcome
+      // worth avoiding.
+      std::fprintf(stderr, "%s\n", mlock_error.c_str());
+      return 1;
+    }
   }
 
   std::signal(SIGINT, on_signal);

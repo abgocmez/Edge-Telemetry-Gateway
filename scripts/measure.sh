@@ -37,6 +37,10 @@ OUT_ROOT="${MEASURE_OUT:-results/$(hostname)-$(date +%Y%m%d)}"
 # but sched.
 LAUNCH=()
 
+# Appended to both, for a flag that has to reach the process itself rather than
+# its launcher. Also sched-only.
+EXTRA=()
+
 for b in etg-gateway etg-probe; do
   if [ ! -x "$BIN/$b" ]; then
     echo "missing binary: $BIN/$b" >&2
@@ -62,13 +66,13 @@ run_once() {
 
   "${LAUNCH[@]}" "$BIN/etg-gateway" --topology "$topology" "${src_args[@]}" --rate "$rate" \
     --capacity "$capacity" --batch "$batch" --linger-us "$linger" \
-    --consumer probe:"$PORT" --seconds "$((SECONDS_RUN + 2))" \
+    --consumer probe:"$PORT" --seconds "$((SECONDS_RUN + 2))" "${EXTRA[@]}" \
     >/dev/null 2>"$run_dir/gateway.log" &
   local gw=$!
   sleep 1
 
   "${LAUNCH[@]}" "$BIN/etg-probe" --port "$PORT" --seconds "$SECONDS_RUN" --warmup "$WARMUP" \
-    ${stall:+--stall-us "$stall"} >/dev/null 2>"$run_dir/probe.log"
+    ${stall:+--stall-us "$stall"} "${EXTRA[@]}" >/dev/null 2>"$run_dir/probe.log"
   wait "$gw" 2>/dev/null
 
   local lat frames rate_out batch_mean lost
@@ -258,18 +262,21 @@ exp_sched() {
 " arm p50 p90 p99 p99.9 max lost     | tee "$dir/summary.txt"
 
   local arm out
-  for arm in idle-other loaded-other loaded-fifo; do
+  for arm in idle-other loaded-other loaded-fifo loaded-fifo-mlock; do
     case "$arm" in
-      idle-other)   LAUNCH=() ;;
-      loaded-other) LAUNCH=(); start_load ;;
-      loaded-fifo)  LAUNCH=(sudo chrt -f 20 --) ;;
+      idle-other)   LAUNCH=(); EXTRA=() ;;
+      loaded-other) LAUNCH=(); EXTRA=(); start_load ;;
+      loaded-fifo)  LAUNCH=(sudo chrt -f 20 --); EXTRA=() ;;
+      # Priority settles who runs among the runnable. A thread waiting on a page
+      # that is not resident is not runnable, and no priority shortens that wait.
+      loaded-fifo-mlock) LAUNCH=(sudo chrt -f 20 --); EXTRA=(--mlock) ;;
     esac
 
     out=$(run_once "$dir/$arm" ring 20000 256 100 8192 "")
     printf "%-16s %10s %10s %10s %10s %10s %10s
 " "$arm"       "$(us "$(echo "$out" | cut -d" " -f3)")"       "$(us "$(echo "$out" | cut -d" " -f4)")"       "$(us "$(echo "$out" | cut -d" " -f5)")"       "$(us "$(echo "$out" | cut -d" " -f6)")"       "$(us "$(echo "$out" | cut -d" " -f7)")"       "$(echo "$out" | cut -d" " -f9)" | tee -a "$dir/summary.txt"
 
-    [ "$arm" = loaded-fifo ] && stop_load
+    [ "$arm" = loaded-fifo-mlock ] && stop_load
   done
   LAUNCH=()
 
