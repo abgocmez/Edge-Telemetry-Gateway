@@ -24,8 +24,9 @@ ThreadSanitizer, against a real SocketCAN interface.
 |---|---|
 | M1 — working pipeline, per-consumer mutex queues (topology A) | done |
 | M2 — lock-free broadcast ring (topology B) | done |
-| M3 — gap markers, cadence monitor | in progress |
-| M4 — measurement on the Pi | |
+| M3 — gap markers, cadence monitor | done |
+| M4 — measurement on the Pi | done |
+| M5 — cross-machine round-trip latency | done |
 
 ## Try it
 
@@ -38,6 +39,21 @@ docker compose up
 
 Then open **<http://localhost:8080/>** for the live view: rate over the last
 minute, per-CAN-id traffic, sequence gaps, and the most recent frames.
+
+![The live view: 3001 frames/s from two virtual CAN buses, six ids, no loss](docs/images/live-view.png)
+
+Above is a fifteen-minute run on the Raspberry Pi 3 B+: two `vcan` interfaces
+driven by `cangen` at six different periods, 2.65 million frames delivered to
+three consumers with no loss markers and nothing missing. The `src` column is
+the part worth looking at — ids from bus 0 and bus 1 interleaved under one
+unbroken sequence, which is the whole reason the ring accepts several producers.
+
+Latency appears at all only because the gateway and the view were on the same
+machine there. Point the view at a gateway across the network and the card
+refuses to plot, because subtracting two machines' `CLOCK_MONOTONIC` readings
+returns the difference in their uptimes rather than a delay — measured between
+this Pi and its development machine, minus 3383 seconds. The cross-machine
+figure comes from round-trip probes instead; see [results/](results/).
 
 The view is worth one sentence of explanation, because *how* it observes is the
 point. It is a consumer like any other — it connects to a gateway port and
