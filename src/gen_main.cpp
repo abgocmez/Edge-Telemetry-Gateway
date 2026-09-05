@@ -7,10 +7,14 @@
 //
 // Two things make the pacing here defensible:
 //
-//   * The schedule is absolute. Tick k is due at start + (k+1)*period, not at
-//     "one period after the last tick". Measuring against the previous tick
-//     hides cumulative drift, because a run that is uniformly 20% slow shows
-//     near-zero inter-tick error while landing nowhere near the requested rate.
+//   * The schedule is absolute, and the kernel is told so. The timer is armed
+//     with TFD_TIMER_ABSTIME against an explicit start instant, and tick k is
+//     measured against start + k*period. Measuring against the previous tick
+//     would hide cumulative drift, because a run that is uniformly 20% slow
+//     shows near-zero inter-tick error while landing nowhere near the requested
+//     rate. Arming absolutely also keeps the cost of timerfd_settime itself out
+//     of every sample, where it would otherwise appear as a constant offset
+//     indistinguishable from real wakeup latency.
 //
 //   * timerfd reports missed expirations, so a tick lost to scheduling is owed
 //     and paid rather than silently skipped.
@@ -153,16 +157,23 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  struct itimerspec spec {};
-  spec.it_interval.tv_sec = static_cast<time_t>(period_ns / 1'000'000'000ULL);
-  spec.it_interval.tv_nsec = static_cast<long>(period_ns % 1'000'000'000ULL);
-  spec.it_value = spec.it_interval;
-
   const std::uint64_t total = rate * seconds;
   etg::Samples jitter;
 
-  const std::uint64_t start = etg::monotonic_ns();
-  if (::timerfd_settime(timer_fd, 0, &spec, nullptr) < 0) {
+  // Absolute arming. The schedule is handed to the kernel as an explicit start
+  // instant and measured against that same value, so the time taken by
+  // timerfd_settime itself cannot leak into every sample as a constant offset.
+  // Armed with a lead so the first tick is genuinely in the future.
+  constexpr std::uint64_t kArmLeadNs = 10'000'000;
+  const std::uint64_t start = etg::monotonic_ns() + kArmLeadNs;
+
+  struct itimerspec spec {};
+  spec.it_interval.tv_sec = static_cast<time_t>(period_ns / 1'000'000'000ULL);
+  spec.it_interval.tv_nsec = static_cast<long>(period_ns % 1'000'000'000ULL);
+  spec.it_value.tv_sec = static_cast<time_t>(start / 1'000'000'000ULL);
+  spec.it_value.tv_nsec = static_cast<long>(start % 1'000'000'000ULL);
+
+  if (::timerfd_settime(timer_fd, TFD_TIMER_ABSTIME, &spec, nullptr) < 0) {
     std::fprintf(stderr, "timerfd_settime: %s\n", std::strerror(errno));
     ::close(timer_fd);
     ::close(can_fd);
@@ -191,7 +202,7 @@ int main(int argc, char** argv) {
     }
 
     for (std::uint64_t e = 0; e < expirations && k < total; ++e, ++k) {
-      const std::uint64_t ideal = start + (k + 1) * period_ns;
+      const std::uint64_t ideal = start + k * period_ns;
       const std::uint64_t now = etg::monotonic_ns();
       jitter.add(static_cast<std::int64_t>(now) - static_cast<std::int64_t>(ideal));
 
