@@ -35,7 +35,12 @@ jobs:
         run: ctest --test-dir build --output-on-failure --no-tests=error
 
       - name: Smoke
-        run: ./build/src/etg-gateway
+        run: ./build/src/etg-gateway --seconds 1 --quiet
+
+      # First test that exercises the generator at all: it needs a CAN
+      # interface, which the WSL2 dev kernel cannot provide.
+      - name: Smoke over vcan (generator to tap)
+        run: ./scripts/smoke-vcan.sh build
 
   # Verifies on day one that the runner can provide a real vcan interface, rather
   # than discovering it at step 3. If this job ever fails, CanSource loses its CI
