@@ -169,13 +169,52 @@ Every published number carries the output of `scripts/measure-env.sh capture`.
 A latency figure without its governor, die temperature, isolated core and clock
 discipline is not a result, because nobody can reproduce it or argue with it.
 
+## Measured on the target
+
+### The claim loop collapses when producers reach the core count
+
+`etg-ringstress` on the Pi, 1 reader, capacity 16 unless stated:
+
+| producers | before | after `sched_yield` |
+|---|---|---|
+| 2 | 14.4M frames/s | 13.0M/s |
+| 3 | 5.7M/s | 7.1M/s |
+| **4** | **10k/s** | 56k/s |
+| 4, capacity 1024 | 565k/s | 1.45M/s |
+| 8, capacity 1024 | 252k/s | **2.07M/s** |
+
+At four producers plus a reader on four cores there is always a descheduled
+thread, and if it holds a claimed cell then everyone waiting on it burns a full
+timeslice: the spin was a `yield` *instruction*, which is a hint and does not
+release the core. Escalating to `sched_yield()` after a bounded spin recovers up
+to 8.2x. It does not rescue a ring that is small relative to its producer count —
+four producers on sixteen cells is still bad — which is a documented limit rather
+than a bug.
+
+None of this is visible on a twenty-core development machine, where the same
+binary runs at 22.3M frames/s. Correctness held throughout: zero torn frames and
+zero out-of-position reads in every configuration, including the collapsed ones.
+
+### The ring is not the bottleneck for the real workload
+
+4 producers, 8192 cells, 2 readers on the Pi: 6.6M frames/s. Four 500 kbit/s CAN
+buses produce on the order of 16k frames/s, so the structure has roughly two
+orders of magnitude of headroom over anything this gateway will actually see.
+The interesting numbers will come from syscalls and the network, not from here.
+
 ## Risks
 
 1. **M2 is the schedule risk.** A correct MP broadcast ring can eat three weeks. M1's mutex queue is
    the insurance; never let M2 block M1 from being demoable.
-2. **QEMU will not reproduce the ARM race.** Its memory model is stronger than real Cortex-A53.
-   QEMU job for functional correctness; the memory-model demonstration runs on real hardware,
-   results committed.
+2. **~~QEMU will not reproduce the ARM race; real hardware will.~~ Measured, and the second
+   half was wrong.** On x86_64, weakening the ring's publish store to relaxed and deleting the
+   reader's acquire fence produces byte-identical machine code — verified by diffing
+   disassembly — so nothing on the development machine can ever fail. On aarch64 the barriers
+   are genuinely emitted (`stlr` 2 → 0, `dmb` 1 → 0). But the Pi 3 B+'s Cortex-A53 is an
+   in-order core and reproduced neither fault under seconds of stress at millions of frames per
+   second. Falsifying a memory-ordering choice needs a core that actually reorders — an
+   out-of-order ARM — and there is none here. The orderings therefore rest on the model plus
+   instruction-level evidence, not on a failing test. See the note in `src/broadcast_ring.hpp`.
 3. **vcan in containers.** Host kernel module, host netns. Gateway needs network_mode: host and
    NET_ADMIN; interfaces created on the host by a setup script.
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <sched.h>
+
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -118,6 +120,39 @@ namespace etg {
 // interesting part, and costs nothing: a relaxed atomic load or store of an
 // aligned 64-bit word compiles to the same instruction as a plain one on both
 // x86_64 and aarch64.
+//
+// ---------------------------------------------------------------------------
+// What testing can and cannot say about the orderings above
+//
+// It cannot say much, and pretending otherwise would be the most dishonest
+// thing in this file. Measured, not assumed:
+//
+//   x86_64    Weakening the publish store to relaxed and deleting the reader's
+//             acquire fence produces **byte-identical machine code**. Verified
+//             by diffing the disassembly of both builds. No test on the
+//             development machine can distinguish them, because there is
+//             nothing to distinguish.
+//
+//   aarch64   The barriers are real and the compiler emits them: `stlr` goes
+//             from 2 to 0 and `dmb` from 1 to 0 when those two edits are made.
+//             So the ordering request does reach the hardware.
+//
+//   Cortex-A53 (Pi 3 B+)
+//             And yet neither broken variant failed. Seconds of stress at
+//             millions of frames per second, with both detectors armed,
+//             reported zero torn and zero out-of-position reads. The A53 is an
+//             in-order core; the architecture permits the reordering, this
+//             implementation does not appear to perform it.
+//
+// The conclusion is worth stating plainly, because an earlier version of this
+// project assumed the opposite: running on "real ARM hardware" is necessary but
+// **not sufficient** to falsify a memory-ordering choice. Falsifying it needs a
+// core that actually reorders - an out-of-order ARM such as A72, A76, Graviton
+// or Apple silicon - and none of those is on this desk.
+//
+// So these orderings rest on the model's guarantees plus instruction-level
+// evidence that the barriers are emitted, and not on a test that fails without
+// them. That is a weaker claim than "tested", and it is the true one.
 class BroadcastRing {
  public:
   static constexpr std::size_t kWordSize = sizeof(std::uint64_t);
@@ -130,11 +165,19 @@ class BroadcastRing {
   // One cell per cache line. Two cells sharing a line would put unrelated
   // producers into a false-sharing fight over the same coherence unit, which is
   // the single easiest way to make a lock-free structure slower than a mutex.
-  struct alignas(64) Cell {
+  //
+  // The alignment is a build option purely so that claim can be measured rather
+  // than asserted: -DETG_CELL_ALIGN=8 packs cells and shows what false sharing
+  // actually costs on a given machine. 64 is the only value to ship.
+#ifndef ETG_CELL_ALIGN
+#define ETG_CELL_ALIGN 64
+#endif
+  struct alignas(ETG_CELL_ALIGN) Cell {
     std::atomic<std::uint64_t> seq{0};
     std::array<std::atomic<std::uint64_t>, kFrameWords> words{};
   };
-  static_assert(sizeof(Cell) == 64, "a cell must be exactly one cache line");
+  static_assert(ETG_CELL_ALIGN != 64 || sizeof(Cell) == 64,
+                "at the shipped alignment a cell must be exactly one cache line");
 
   enum class ReadStatus : std::uint8_t {
     kOk,      // a frame was produced
@@ -170,6 +213,20 @@ class BroadcastRing {
   // it, it may already be stale.
   [[nodiscard]] std::uint64_t write_position() const noexcept {
     return write_pos_.load(std::memory_order_relaxed);
+  }
+
+  // Reads whose payload did not match the position their sequence word claimed.
+  //
+  // In a correct build this is unreachable, which is exactly why it is worth
+  // counting: it is the detector for a broken publish ordering. If the release
+  // on the publish store is weakened, a reader can observe the new sequence
+  // before the payload stores are visible and copy out the *previous*
+  // occupant's frame - which is internally consistent and therefore invisible
+  // to any checksum over the payload. Comparing the frame's own sequence field
+  // against the position the cursor asked for catches it, because the ring
+  // writes the position into that field as part of the payload.
+  [[nodiscard]] std::uint64_t inconsistent_reads() const noexcept {
+    return inconsistent_reads_.load(std::memory_order_relaxed);
   }
 
   // How many times a producer found a cell still held by its previous occupant
@@ -252,6 +309,15 @@ class BroadcastRing {
     if (s2 != s1) {
       // A producer took the cell while it was being read. The bytes just copied
       // are a mixture of two frames and are discarded, not reported.
+      lap(cursor);
+      return ReadStatus::kLapped;
+    }
+
+    // One comparison, always on. The value is already in a register and the
+    // branch is never taken in a correct build; the cost is nothing and the
+    // alternative is a whole class of ordering bug that produces plausible data.
+    if (words[0] != cursor.next) {
+      inconsistent_reads_.fetch_add(1, std::memory_order_relaxed);
       lap(cursor);
       return ReadStatus::kLapped;
     }
@@ -388,13 +454,29 @@ class BroadcastRing {
     const std::uint64_t claimed = 2 * pos + 1;
 
     std::uint64_t witness = expected;
+    unsigned spins = 0;
     while (!cell.seq.compare_exchange_weak(witness, claimed, std::memory_order_acquire,
                                            std::memory_order_relaxed)) {
       // Only a producer still mid-write on the previous lap can hold this cell.
       // Reset the expectation and retry; this is the obstruction-free window.
       witness = expected;
       claim_retries_.fetch_add(1, std::memory_order_relaxed);
-      spin();
+
+      if (++spins < kSpinsBeforeYield) {
+        spin();
+        continue;
+      }
+      // Measured on the Pi: with producers >= cores this loop collapses. Four
+      // producers and one reader on four cores fell from 14.4M frames/s to
+      // 10k/s, with 75 million retries. The cause is that the cheap spin above
+      // is a scheduling *hint* - it does not release the core - so every thread
+      // waiting on a descheduled claim holder burns its whole timeslice keeping
+      // the scheduler from running the one thread that could make progress.
+      //
+      // On a four-core edge device with four buses that is the normal operating
+      // condition, not a corner case, so the loop gives the core back instead.
+      spins = 0;
+      ::sched_yield();
     }
 
     std::array<std::uint64_t, kFrameWords> words{};
@@ -417,6 +499,11 @@ class BroadcastRing {
     idle_cv_.notify_all();
   }
 
+  // Long enough that an uncontended collision costs nothing but a few pauses,
+  // short enough that a descheduled holder is not waited on for a whole
+  // timeslice.
+  static constexpr unsigned kSpinsBeforeYield = 64;
+
   static void spin() noexcept {
 #if defined(__x86_64__) || defined(__i386__)
     __builtin_ia32_pause();
@@ -434,6 +521,7 @@ class BroadcastRing {
 
   // Diagnostic only, never read by the protocol, so relaxed throughout.
   std::atomic<std::uint64_t> claim_retries_{0};
+  mutable std::atomic<std::uint64_t> inconsistent_reads_{0};
 
   // Idle-path only. None of this participates in the lock-free protocol.
   mutable std::atomic<std::uint32_t> waiters_{0};
