@@ -41,9 +41,16 @@ done
 # leaves the full logs in $run_dir.
 run_once() {
   local run_dir="$1" topology="$2" rate="$3" batch="$4" linger="$5" capacity="$6" stall="$7"
+  local sources="${8:-1}"
   mkdir -p "$run_dir"
 
-  "$BIN/etg-gateway" --topology "$topology" --source synth --rate "$rate" \
+  local src_args=()
+  local i
+  for ((i = 0; i < sources; i++)); do
+    src_args+=(--source synth)
+  done
+
+  "$BIN/etg-gateway" --topology "$topology" "${src_args[@]}" --rate "$rate" \
     --capacity "$capacity" --batch "$batch" --linger-us "$linger" \
     --consumer probe:"$PORT" --seconds "$((SECONDS_RUN + 2))" \
     >/dev/null 2>"$run_dir/gateway.log" &
@@ -156,17 +163,47 @@ exp_topology() {
   local dir="$OUT_ROOT/topology"
   capture_env "$dir"
   header "topology A against topology B under identical load"
-  printf "%-9s %-8s %12s %12s %10s %10s\n" topology sources delivered lost p50 p99 | tee "$dir/summary.txt"
+  printf "%-9s %-8s %12s %12s %11s\n" topology sources "gw sent" "gw dropped" "delivered %" \
+    | tee "$dir/summary.txt"
 
-  # Several sources is where the two differ: A must serialise ingest on one
-  # thread to keep the sequence ordered, B does not.
-  local topo r
-  for topo in queue ring; do
-    r=$(run_once "$dir/$topo" "$topo" 50000 256 0 8192 200)
-    set -- $r
-    printf "%-9s %-8s %12s %12s %9sus %9sus\n" "$topo" 1 "$1" "$9" "$(us "$3")" "$(us "$5")" \
-      | tee -a "$dir/summary.txt"
+  # The source count is the variable that matters, and an earlier version of this
+  # experiment left it at one - where the two topologies do almost the same work
+  # and the comparison says almost nothing.
+  #
+  # With several sources, A has to poll them all from a single thread and copy
+  # every frame once per consumer. That single thread is forced rather than
+  # chosen: order in a queue is push order, so spreading ingest across threads
+  # would hand a consumer sequences out of order. B takes its order from the cell
+  # position and has no such constraint.
+  local topo srcs r
+  for srcs in 1 4; do
+    for topo in queue ring; do
+      run_once "$dir/$topo-$srcs" "$topo" 25000 256 0 8192 200 "$srcs" >/dev/null
+
+      # Gateway-side counters, not the consumer's.
+      #
+      # The consumer stalls on purpose here, which makes its latency confounded:
+      # a topology that delivers more also delivers older frames, so a lower p50
+      # can mean "dropped more" rather than "was faster". What the gateway sent
+      # and dropped is unambiguous. The probe logs still hold the rest.
+      local gwlog="$dir/$topo-$srcs/gateway.log"
+      local sent dropped pct
+      sent=$(tail -1 "$gwlog" | tr ' ' '\n' | sed -n 's/^sent=//p')
+      dropped=$(tail -1 "$gwlog" | tr ' ' '\n' | sed -n 's/^dropped=//p')
+      pct=$(awk -v s="${sent:-0}" -v d="${dropped:-0}" \
+        'BEGIN{t=s+d; printf "%.1f", (t>0)? 100*s/t : 0}')
+      printf "%-9s %-8s %12s %12s %10s%%\n" "$topo" "$srcs" "${sent:-0}" "${dropped:-0}" "$pct" \
+        | tee -a "$dir/summary.txt"
+    done
   done
+  {
+    echo
+    echo "Rate is per source, so the four-source rows offer four times the load."
+    echo
+    echo "Consumer-side latency is deliberately not compared here, for the reason"
+    echo "in the comment above: under a deliberate stall, delivering more also"
+    echo "means delivering older, and the two effects are not separable."
+  } | tee -a "$dir/summary.txt"
 }
 
 # ------------------------------------------------------------------ main ---

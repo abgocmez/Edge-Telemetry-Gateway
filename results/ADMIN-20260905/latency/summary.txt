@@ -1,0 +1,7 @@
+topology  rate            p50        p90        p99      p99.9        max
+ring      2000          64.6us      68.0us      74.1us     172.6us     915.6us
+ring      20000         61.4us      64.6us     428.4us   12644.9us   17741.6us
+ring      100000        68.5us      89.9us   77374.5us  110755.7us  116617.2us
+queue     2000          63.6us      67.0us      69.8us     110.9us     938.2us
+queue     20000         61.7us      74.9us     227.2us   12873.0us   17733.9us
+queue     100000        73.3us      92.5us   77132.3us  111397.7us  117288.4us

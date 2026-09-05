@@ -1,0 +1,22 @@
+consumer probe      listening on port 9900
+topology ring, 1 source(s), capacity 8192, batch 256, linger 100us
+  source synth0
+ingest 20044/s total=20044 | probe -- sent=0 drop=0 wblock=0 lag=20046
+ingest 20016/s total=40060 | probe up sent=28164 drop=11894 wblock=0 lag=0
+ingest 20015/s total=60075 | probe up sent=48182 drop=11894 wblock=0 lag=0
+ingest 20017/s total=80092 | probe up sent=68196 drop=11894 wblock=0 lag=3
+ingest 20017/s total=100109 | probe up sent=88214 drop=11894 wblock=0 lag=0
+ingest 20015/s total=120124 | probe up sent=108228 drop=11894 wblock=0 lag=3
+ingest 20018/s total=140142 | probe up sent=128250 drop=11894 wblock=0 lag=0
+ingest 20017/s total=160159 | probe up sent=148264 drop=11894 wblock=0 lag=1
+ingest 20016/s total=180175 | probe up sent=168278 drop=11894 wblock=0 lag=3
+ingest 20016/s total=200191 | probe up sent=188297 drop=11894 wblock=0 lag=0
+ingest 20020/s total=220211 | probe -- sent=208188 drop=11894 wblock=0 lag=130
+ingest 20014/s total=240225 | probe -- sent=208188 drop=11894 wblock=0 lag=20145
+
+shutting down
+
+topology ring
+source   synth0     frames=240228 kernel_drops=0 read_errors=0
+ingest   frames=240228 batches=240120 threads=1 claim_retries=0
+consumer probe      sent=208188 bytes=9147344 batches=51239 dropped=11894 would_block=0 partial=0 connects=1 disconnects=1 gaps_sent=0 frames_lost=0 lingered=51207

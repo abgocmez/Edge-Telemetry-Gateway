@@ -1,0 +1,145 @@
+# Measurements
+
+Everything here is produced by `scripts/measure.sh` and carries the output of
+`scripts/measure-env.sh capture` beside it. Each experiment directory holds a
+`summary.txt`, an `env.txt`, and the raw gateway and probe logs for every run.
+
+## Method
+
+- **Source.** The synthetic in-process generator, not vcan. The offered rate is
+  then a knob rather than a property of a driver, and the loopback's own
+  behaviour is not folded into a measurement of the pipeline. The vcan path is
+  covered separately by `scripts/smoke-vcan.sh`.
+- **Latency.** `now - frame.t_ingest_ns`, both `CLOCK_MONOTONIC`, taken when the
+  consumer's `read()` returns. It covers everything the gateway is responsible
+  for: fan-out or ring publish, queueing, encoding, and the TCP write.
+- **Warm-up.** The first seconds of samples are discarded. A consumer that
+  connects to a running gateway finds a backlog waiting, and those frames were
+  queued before it existed — their measured latency is the age of the buffer,
+  not the behaviour of the pipeline. Without this the tail is
+  `queue_depth / rate` and says nothing about the system.
+- **Governor.** Runs are taken with `measure-env.sh perf-on`. It is not made
+  permanent: an always-performance board runs hotter and reaches its thermal
+  knee sooner, which would change the very throttling behaviour worth measuring.
+
+## What these numbers are not
+
+- **Not cross-machine.** Both timestamps are `CLOCK_MONOTONIC` on one host.
+  Across machines those clocks share no epoch and the difference is meaningless.
+  The split deployment uses `chrony` and is reported separately.
+- **Not a bus.** vcan has no bit timing, no arbitration and no bus-off, and the
+  synthetic source has no rate ceiling at all. Offered rates here go far above
+  what a 500 kbit/s CAN bus can carry (roughly 4000 frames/s), and they are
+  chosen to find the pipeline's limits, not to model a vehicle.
+- **Not the network.** The consumer is on the same host, so the TCP path is
+  loopback. The Pi's Ethernet is USB-attached with a realistic ceiling around
+  200–230 Mbit/s, and its WiFi is worse and far more variable; neither is in
+  these figures.
+
+## Reading a latency tail
+
+A tail that is much larger than the median usually means the consumer briefly
+stopped draining, not that the pipeline stalled. The gateway's own counters in
+`gateway.log` say which: `would_block` is back-pressure from the socket,
+`dropped` is the consumer's queue or ring cells being overwritten, and
+`lingered` is batches that waited to coalesce on purpose.
+
+## Findings
+
+Raspberry Pi 3 B+, aarch64, GCC 14.2, governor `performance`, one consumer,
+synthetic source. Full provenance in each experiment's `env.txt`.
+
+### The median is flat; only the tail moves
+
+| rate | p50 | p99 | p99.9 |
+|---|---|---|---|
+| 2 000/s | 64.6 µs | 74.1 µs | 172.6 µs |
+| 20 000/s | 61.4 µs | 428.4 µs | 12.6 ms |
+| 100 000/s | 68.5 µs | 77.4 ms | 110.8 ms |
+
+Across a fiftyfold change in offered rate the median moves by 7 µs. What
+degrades is the tail, and it degrades by five orders of magnitude. Both
+topologies behave the same way here.
+
+Four 500 kbit/s CAN buses produce on the order of 16 000 frames/s, so the
+middle row is already well past anything this gateway would see in the role it
+was built for.
+
+### Batching is not a monotonic trade on this hardware
+
+| linger | frames/batch | p50 | p99 | write syscalls/s |
+|---|---|---|---|---|
+| 0 | 1.0 | 62.0 µs | **1407.0 µs** | 20 000 |
+| 100 µs | 4.1 | 123.7 µs | **376.8 µs** | 4 878 |
+| 250 µs | 7.1 | 214.2 µs | 401.0 µs | 2 817 |
+| 1000 µs | 22.7 | 603.9 µs | 1138.4 µs | 881 |
+| 5000 µs | 103.7 | 2616.0 µs | 5104.5 µs | 193 |
+
+The expected shape is that waiting to coalesce buys throughput and costs tail
+latency. On the development machine it does exactly that, monotonically: p99
+rises from 107 µs at linger 0 through 246 µs, 378 µs and upward.
+
+On the Pi the curve turns over. A linger of 100 µs makes the tail **3.7x
+better**, not worse. Twenty thousand write syscalls a second is itself the
+dominant source of tail latency on four 1.4 GHz cores, and cutting it fourfold
+more than pays for the delay introduced. The optimum here is somewhere around
+100–250 µs; on x86 it is zero.
+
+This is the clearest argument in the project for measuring on the target rather
+than on the machine the code was written on. The same sweep on the development
+machine would have supported the opposite recommendation.
+
+### Under overload, more loss means lower latency
+
+| offered | delivered | lost | loss | p99 |
+|---|---|---|---|---|
+| 5 000/s | 48 760 | 0 | 0.00% | 1227 ms |
+| 20 000/s | 108 179 | 62 185 | 36.50% | 2223 ms |
+| 50 000/s | 130 612 | 349 764 | 72.81% | 1367 ms |
+| 200 000/s | 359 964 | 1 634 792 | 81.95% | **635 ms** |
+
+Loss rises with load, as expected. Latency does not: it peaks at 20 000/s and
+then *falls* as loss increases. That is drop-oldest working as designed — the
+more aggressively stale frames are discarded, the younger the surviving ones
+are when they arrive. A pipeline that buffered instead of dropping would
+deliver everything, eventually, and every frame would be worthless by then.
+
+The 5 000/s row is the one to read carefully: zero loss and 1.2 seconds of
+latency. Nothing was dropped because an 8192-deep buffer at that rate holds
+1.6 seconds of traffic, so the delay is the buffer, not the pipeline.
+
+### The topologies differ only when there is more than one bus
+
+| topology | sources | sent | dropped | delivered |
+|---|---|---|---|---|
+| queue | 1 | 147 733 | 144 334 | 50.6% |
+| ring | 1 | 145 212 | 129 886 | 52.8% |
+| queue | 4 | 265 645 | 927 012 | **22.3%** |
+| ring | 4 | 468 905 | 621 642 | **43.0%** |
+
+With one source the two are indistinguishable, which is the honest result: the
+ring's machinery buys nothing when there is one producer and no contention.
+With four, the ring delivers nearly twice as much of the same offered load.
+
+Topology A is not slow by accident. Order in a queue is push order, so it cannot
+spread ingest across threads without handing a consumer sequences out of order —
+its single fan-out thread is forced by the ordering guarantee, and it then has
+to copy every frame once per consumer. The ring takes its order from the cell
+position and needs neither.
+
+## Caveat that applies to every number above
+
+`throttled_meaning=soft-temp-limit-occurred` appears in the provenance of these
+runs. The board was clean (`0x0`) before them and reached its soft temperature
+limit during them — 49 °C idle, 57 °C after — at which point a Pi 3 B+ drops
+from 1400 MHz to 1200 MHz.
+
+So an unknown fraction of this data was taken on a thermally capped CPU. The
+direction of every finding above survives it, because the comparisons are
+between runs on the same board minutes apart, but the absolute figures are not
+a clean 1400 MHz measurement.
+
+This is exactly why the environment is captured beside the numbers rather than
+assumed. Fixing it properly means a heatsink, and quantifying it means a
+sustained run with a temperature trace alongside throughput — which is its own
+experiment, not a footnote to this one.

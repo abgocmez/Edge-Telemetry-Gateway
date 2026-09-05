@@ -48,8 +48,26 @@ capture() {
   temp=$(first_line /sys/class/thermal/thermal_zone0/temp)
   [ -n "$temp" ] && kv temp_c "$(awk -v t="$temp" 'BEGIN{printf "%.1f", t/1000}')"
 
+  # vcgencmd reports throttling as a bitmask, which is unreadable in a record
+  # somebody has to interpret months later. The low bits say "right now"; the
+  # 0x10000 ones say "at some point since boot", and that second half is the
+  # important one: a run can finish with the board no longer capped and still
+  # have spent part of its time capped, and a number taken under a thermal cap
+  # is not the number it appears to be.
   if command -v vcgencmd >/dev/null 2>&1; then
-    kv throttled "$(vcgencmd get_throttled 2>/dev/null | cut -d= -f2)"
+    local thr meaning=""
+    thr=$(vcgencmd get_throttled 2>/dev/null | cut -d= -f2)
+    kv throttled "$thr"
+    local v=$((thr))
+    [ $((v & 0x1)) -ne 0 ]     && meaning="$meaning,under-voltage-now"
+    [ $((v & 0x2)) -ne 0 ]     && meaning="$meaning,arm-capped-now"
+    [ $((v & 0x4)) -ne 0 ]     && meaning="$meaning,throttled-now"
+    [ $((v & 0x8)) -ne 0 ]     && meaning="$meaning,soft-temp-limit-now"
+    [ $((v & 0x10000)) -ne 0 ] && meaning="$meaning,under-voltage-occurred"
+    [ $((v & 0x20000)) -ne 0 ] && meaning="$meaning,arm-capping-occurred"
+    [ $((v & 0x40000)) -ne 0 ] && meaning="$meaning,throttling-occurred"
+    [ $((v & 0x80000)) -ne 0 ] && meaning="$meaning,soft-temp-limit-occurred"
+    kv throttled_meaning "${meaning#,}"
   fi
 
   # Clock discipline. Reported for every run, not just cross-machine ones: a

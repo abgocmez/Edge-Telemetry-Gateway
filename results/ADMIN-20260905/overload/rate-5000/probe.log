@@ -1,0 +1,23 @@
+connected to 127.0.0.1:9900
+9237/s total=9237 lost=0 gw_p50=0ns
+4623/s total=13860 lost=0 gw_p50=232052171ns
+4643/s total=18503 lost=0 gw_p50=274175635ns
+4576/s total=23079 lost=0 gw_p50=309573242ns
+4384/s total=27463 lost=0 gw_p50=350772074ns
+4149/s total=31612 lost=0 gw_p50=378635026ns
+4579/s total=36191 lost=0 gw_p50=425582115ns
+4205/s total=40396 lost=0 gw_p50=507576812ns
+4232/s total=44628 lost=0 gw_p50=569456335ns
+
+frames        48760 in 10.004s = 4874.3/s
+batches       27302 (mean 1.8 frames/batch)
+markers       0  (0 frames, gateway-reported)
+absent        0  (0 frames passed while disconnected)
+silent jumps  0  (0 frames, no marker: a protocol fault)
+connections   1
+protocol_errs 0
+warmup        13859 samples discarded (first 2s)
+
+latency, nanoseconds (valid only within one CLOCK_MONOTONIC domain):
+gateway  n=34901 (retained 34901, stride 1)
+         min 232052171  p50 679132162  p90 1124268879  p99 1226790987  p99.9 1246489912  max 1252033899  mean 670055970
