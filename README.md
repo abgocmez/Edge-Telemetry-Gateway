@@ -46,12 +46,21 @@ it only sees what a consumer can see. Queue depth, `would_block` and per-consume
 drop counts live in the gateway and are printed there, because no consumer is
 told about them.
 
-Against a real SocketCAN interface:
+That default path runs on a bridge network and works on Docker Desktop
+(Windows, macOS) as well as on Linux.
+
+Against a real SocketCAN interface — **Linux hosts only**:
 
 ```sh
 sudo ./scripts/setup-vcan.sh 1
-ETG_SOURCE=can:vcan0 docker compose --profile vcan up
+ETG_SOURCE=can:vcan0 docker compose   -f docker-compose.yml -f docker-compose.vcan.yml --profile vcan up
 ```
+
+`vcan` is a host kernel module whose interface lives in the host's network
+namespace, so those containers must share that namespace. On Docker Desktop
+"the host" is the Linux VM rather than the machine you are sitting at, and that
+VM's kernel has no `vcan` — which is exactly why the default path does not use
+host networking.
 
 Building natively:
 

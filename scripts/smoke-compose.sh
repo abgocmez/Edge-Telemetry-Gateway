@@ -6,6 +6,8 @@
 # boundaries, host-namespace CAN access, and consumers that connect over TCP
 # from separate containers.
 #
+# It uses the vcan override, so it needs a Linux host - see docker-compose.vcan.yml.
+#
 # The image is built from debian:bookworm, which ships GCC 12 - the same
 # compiler as Raspberry Pi OS bookworm. A build failure here is a warning that
 # the code would not compile on the measurement target.
@@ -30,45 +32,45 @@ export ETG_SECONDS="$SECONDS_RUN"
 cleanup() {
   echo
   echo "--- tearing down ---"
-  docker compose --profile vcan down --volumes --remove-orphans >/dev/null 2>&1 || true
+  docker compose -f docker-compose.yml -f docker-compose.vcan.yml --profile vcan down --volumes --remove-orphans >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 echo "--- building ---"
-docker compose build --quiet
+docker compose -f docker-compose.yml -f docker-compose.vcan.yml build --quiet
 
 echo "--- starting gateway and consumers ---"
-docker compose up -d gateway probe recorder
+docker compose -f docker-compose.yml -f docker-compose.vcan.yml up -d gateway probe recorder
 
 # Consumers use --reconnect, so they tolerate coming up before the gateway is
 # listening. Give the stack a moment to settle before generating.
 sleep 3
 
 echo "--- generating ${RATE}/s for ${SECONDS_RUN}s on ${IFACE} ---"
-docker compose --profile vcan run --rm generator
+docker compose -f docker-compose.yml -f docker-compose.vcan.yml --profile vcan run --rm generator
 
 sleep 2
 
 echo
 echo "--- gateway ---"
-docker compose logs --no-log-prefix --tail 6 gateway
+docker compose -f docker-compose.yml -f docker-compose.vcan.yml logs --no-log-prefix --tail 6 gateway
 
 echo
 echo "--- probe ---"
-docker compose logs --no-log-prefix --tail 4 probe
+docker compose -f docker-compose.yml -f docker-compose.vcan.yml logs --no-log-prefix --tail 4 probe
 
 # Stop the recorder before reading its file. It buffers, so a capture read from
 # under a running writer ends mid-message - which is legitimate, but it means
 # the file cannot be checked for completeness. SIGTERM makes it flush and close.
 echo
 echo "--- stopping the recorder so its capture is complete ---"
-docker compose stop recorder
+docker compose -f docker-compose.yml -f docker-compose.vcan.yml stop recorder
 
 echo
 echo "--- capture, parsed from the spec inside the container ---"
 # Parsed in a container that mounts the same volume, so the check runs against
 # the bytes the recorder actually wrote rather than a copy.
-parsed=$(docker compose run --rm --entrypoint "" -v etg-data:/data recorder \
+parsed=$(docker compose -f docker-compose.yml -f docker-compose.vcan.yml \n  run --rm --entrypoint "" -v etg-data:/data recorder \
   python3 /usr/local/bin/parse-capture.py --strict /data/capture.etg)
 echo "$parsed"
 

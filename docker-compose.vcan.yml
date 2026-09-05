@@ -1,0 +1,77 @@
+# Override that puts every service in the host network namespace, so the
+# gateway and the generator can see vcan0.
+#
+#   sudo ./scripts/setup-vcan.sh 1
+#   docker compose -f docker-compose.yml -f docker-compose.vcan.yml --profile vcan up
+#
+# Linux hosts only, and the reason is worth being precise about rather than
+# labelling it a limitation.
+#
+# vcan is a host kernel module whose interface lives in the host's network
+# namespace, so a container can only see vcan0 by sharing that namespace. On
+# Docker Desktop for Windows and macOS, "the host" is the Linux VM Docker runs,
+# not the machine you are sitting at - so a host-networked container is not
+# reachable from the browser, and the VM's kernel has no vcan anyway. That is
+# why the default compose file uses a bridge network instead: on a developer
+# machine the synthetic source is the usable one, and it needs none of this.
+#
+# Host networking also means ports cannot be published, so the view is reached
+# directly on the host's own port 8080.
+#
+# vcan is created on the host, never from inside a container. Doing it in the
+# container would need NET_ADMIN over the host namespace, which is a large
+# privilege to hand a service to save one command.
+
+services:
+  gateway:
+    network_mode: host
+    # CAP_NET_RAW is what PF_CAN/SOCK_RAW needs. Docker grants it by default; it
+    # is named so the requirement is visible rather than silently inherited.
+    cap_add:
+      - NET_RAW
+    environment:
+      ETG_GATEWAY_HOST: 127.0.0.1
+
+  probe:
+    network_mode: host
+    environment:
+      ETG_GATEWAY_HOST: 127.0.0.1
+    command:
+      - etg-probe
+      - --host
+      - 127.0.0.1
+      - --port
+      - "9001"
+      - --reconnect
+      - --warmup
+      - "2"
+
+  recorder:
+    network_mode: host
+    command:
+      - etg-record
+      - --host
+      - 127.0.0.1
+      - --port
+      - "9002"
+      - --reconnect
+      - --out
+      - /data/capture.etg
+
+  view:
+    network_mode: host
+    # Host networking cannot publish; the container binds the host port itself.
+    ports: !reset []
+    command:
+      - etg-view
+      - --host
+      - 127.0.0.1
+      - --port
+      - "9003"
+      - --http
+      - "${ETG_HTTP_PORT:-8080}"
+
+  generator:
+    network_mode: host
+    cap_add:
+      - NET_RAW

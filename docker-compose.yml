@@ -1,42 +1,37 @@
 # Gateway and its consumers as separate containers.
 #
-#   docker compose up                      synthetic source, works anywhere
-#   ETG_SOURCE=can:vcan0 docker compose --profile vcan up
-#                                          real SocketCAN, needs vcan on the host
+#   docker compose up
+#       Synthetic source on an ordinary bridge network. Works on Docker Desktop
+#       (Windows, macOS) as well as on Linux. Open http://localhost:8080/ for
+#       the live view.
 #
-# Networking. Every service runs on the host network namespace, for one reason:
-# vcan is a host kernel module and its interface lives in the host's network
-# namespace, so a container can only see vcan0 by sharing that namespace. Once
-# the gateway is on host networking it cannot publish ports, so the consumers
-# join it there too.
+#   sudo ./scripts/setup-vcan.sh 1
+#   docker compose -f docker-compose.yml -f docker-compose.vcan.yml --profile vcan up
+#       Real SocketCAN. Linux hosts only - the override explains why.
 #
-# Be clear about what that does and does not demonstrate. The processes are
-# genuinely separate, with separate filesystems and lifecycles, and they speak
-# the documented protocol over real TCP sockets. What is *not* demonstrated here
-# is a network boundary between machines - that is M3, where a probe runs on
-# another host over the LAN, and where the clock-domain problem becomes real.
+# Networking here is the compose default: a project network with DNS, so the
+# consumers reach the gateway by service name and only the view publishes a
+# port. Host networking is confined to the vcan override, where the kernel
+# forces it rather than it being a choice.
 #
-# vcan must already exist on the host; create it with scripts/setup-vcan.sh.
-# Deliberately not created from inside a container: that would need NET_ADMIN on
-# the host namespace, which is a large privilege to hand a service just to save
-# one command.
+# What this does demonstrate: separate processes, separate filesystems, separate
+# lifecycles, speaking the documented protocol over real TCP. What it does not
+# demonstrate is a boundary between machines - that is M3, where a probe runs
+# over the LAN and the clock-domain problem stops being theoretical.
 
 x-etg: &etg
   build:
     context: .
     dockerfile: docker/Dockerfile
   image: etg:local
-  network_mode: host
   restart: unless-stopped
 
 services:
   gateway:
     <<: *etg
     container_name: etg-gateway
-    # CAP_NET_RAW is what PF_CAN/SOCK_RAW needs. Docker grants it by default;
-    # it is named here so the requirement is visible rather than inherited.
-    cap_add:
-      - NET_RAW
+    # Publishes nothing on purpose. The consumer ports are an internal protocol
+    # between these services, not a public interface.
     command:
       - etg-gateway
       - --source
@@ -62,7 +57,7 @@ services:
     command:
       - etg-probe
       - --host
-      - 127.0.0.1
+      - ${ETG_GATEWAY_HOST:-gateway}
       - --port
       - "9001"
       - --reconnect
@@ -78,7 +73,7 @@ services:
     command:
       - etg-record
       - --host
-      - 127.0.0.1
+      - ${ETG_GATEWAY_HOST:-gateway}
       - --port
       - "9002"
       - --reconnect
@@ -87,21 +82,25 @@ services:
 
   # The live view is a consumer like any other: it reaches the gateway only
   # through the documented protocol, with no debug hook and no side channel.
-  # Open http://localhost:8080/ once the stack is up.
+  # It is the one service that publishes a port, because it is the one meant to
+  # be opened by a person.
   view:
     <<: *etg
     container_name: etg-view
     depends_on: [gateway]
+    ports:
+      - "${ETG_HTTP_PORT:-8080}:8080"
     command:
       - etg-view
       - --host
-      - 127.0.0.1
+      - ${ETG_GATEWAY_HOST:-gateway}
       - --port
       - "9003"
       - --http
-      - "${ETG_HTTP_PORT:-8080}"
+      - "8080"
 
-  # Only started with --profile vcan, because it needs a real CAN interface.
+  # Only started with --profile vcan, and only useful together with the vcan
+  # override, which is what puts it in the namespace where vcan0 exists.
   generator:
     <<: *etg
     container_name: etg-gen
