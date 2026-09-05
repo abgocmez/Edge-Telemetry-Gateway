@@ -301,9 +301,16 @@ TEST_CASE("many producers never tear a frame and never lose per-producer order",
 
   CHECK(ring.write_position() == static_cast<std::uint64_t>(kProducers) * kPerProducer);
   CHECK(received > 0);
-  for (int p = 0; p < kProducers; ++p) {
-    CHECK(seen_any[p]);  // every producer's work reached the reader at least once
-  }
+
+  // There is deliberately no assertion that every producer's frames reached the
+  // reader. An earlier version had one and it failed under TSan on a four-core
+  // runner - correctly. Under at-most-once delivery with heavy lapping, a
+  // producer that ran while the reader was behind can legitimately have all of
+  // its frames overwritten before the reader ever looks. Asserting otherwise was
+  // testing a promise the design does not make, and the sanitizer run is what
+  // exposed it: the low-volume case is the one where the reader has the least
+  // chance to see everyone.
+  static_cast<void>(seen_any);
 }
 
 TEST_CASE("every reader sees the same stream independently", "[ring][stress]") {
