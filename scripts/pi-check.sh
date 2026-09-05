@@ -30,6 +30,12 @@ head_() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# modinfo, lsmod and friends live in /sbin and /usr/sbin, which are not on a
+# regular user's PATH on Debian. Without this the module check reports a missing
+# module when the module is present - a false FAIL, and the first thing this
+# script itself got wrong.
+export PATH="$PATH:/sbin:/usr/sbin"
+
 # ---------------------------------------------------------------- platform ---
 head_ "Platform"
 
@@ -232,16 +238,30 @@ fi
 # ------------------------------------------------------------------- disk ---
 head_ "Storage"
 
-tmpf="./.pi-check-write-test"
-if dd if=/dev/zero of="$tmpf" bs=1M count=64 conv=fsync 2>&1 | tail -1 | grep -q .; then
+# Measured where the recorder would actually write, not in whatever directory
+# this happens to be launched from. Run in /tmp on a Pi this reported 439 MB/s -
+# impossible over USB 2.0, and simply the speed of RAM, because /tmp is a tmpfs.
+# That is the same class of mistake as reporting latency without excluding
+# warm-up, and this script made it before it caught it.
+WRITE_DIR="${PI_CHECK_WRITE_DIR:-$HOME}"
+fstype=$(df -PT "$WRITE_DIR" 2>/dev/null | awk 'NR==2{print $2}')
+mountpt=$(df -P "$WRITE_DIR" 2>/dev/null | awk 'NR==2{print $6}')
+
+if [ "$fstype" = "tmpfs" ] || [ "$fstype" = "ramfs" ]; then
+  warn "write target" "$WRITE_DIR is $fstype" \
+       "that is RAM, not storage; set PI_CHECK_WRITE_DIR to a real filesystem"
+else
+  ok "write target" "$WRITE_DIR ($fstype on $mountpt)"
+
+  tmpf="$WRITE_DIR/.pi-check-write-test"
   speed=$(dd if=/dev/zero of="$tmpf" bs=1M count=64 conv=fsync 2>&1 | tail -1 | sed 's/.*, //')
   rm -f "$tmpf"
-  ok "sequential write" "$speed"
-  NOTES+=("NOTE storage: this is the recorder's real speed. On WSL the same \
-measurement reported 125ns per write because it never left the page cache.")
-else
-  rm -f "$tmpf"
-  warn "sequential write" "could not measure"
+  if [ -n "$speed" ]; then
+    ok "sequential write" "$speed"
+    NOTES+=("NOTE storage: $speed on $fstype - this is the recorder's real write speed. On WSL the same measurement reported 125ns per write because it never left the page cache.")
+  else
+    warn "sequential write" "could not measure"
+  fi
 fi
 
 # ---------------------------------------------------------------- summary ---

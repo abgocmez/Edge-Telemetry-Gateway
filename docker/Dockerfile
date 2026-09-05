@@ -1,8 +1,15 @@
-# Debian bookworm on purpose: it ships GCC 12, which is what Raspberry Pi OS
-# bookworm ships. Building here therefore checks the decision to stay on C++20
-# rather than C++23 - the compiler on the measurement target is the one that
-# defines the floor, and a build that only works on the development machine's
-# GCC 15 would be discovered on the Pi rather than in CI.
+# Debian bookworm on purpose, as a deliberate compiler floor.
+#
+# It ships GCC 12, which is older than both ends of the real range: the
+# development machine has GCC 15 and the Pi currently runs Debian 13 trixie with
+# GCC 14.2. Building against the oldest of the three is what keeps the C++20
+# decision honest - a feature that quietly needs a newer compiler fails here, in
+# CI, rather than on whatever the measurement target happens to be running after
+# its next upgrade.
+#
+# (Earlier revisions of this comment claimed the Pi ran bookworm/GCC 12. It does
+# not; that was assumed rather than checked, and checking it is what turned this
+# from a matching-compiler argument into a floor argument.)
 FROM debian:bookworm-slim AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
