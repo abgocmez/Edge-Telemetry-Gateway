@@ -9,10 +9,10 @@ answers **what happens when a consumer cannot keep up, when the producer outruns
 the pipeline, and when a consumer disappears and comes back**.
 
 ```
-vcan0 ─┐                      [queue]──► [egress]──► TCP ──► probe
-vcan1 ─┼──► [ingest thread]──► [queue]──► [egress]──► TCP ──► recorder
-vcan2 ─┤     assign seq        [queue]──► [egress]──► TCP ──► live view
-LIN ───┘                       one per consumer
+vcan0 ─┐                              ┌─► [egress] ──► TCP ──► probe
+vcan1 ─┼─► [ingest] ─► [ring or queue] ┼─► [egress] ──► TCP ──► recorder
+vcan2 ─┤    assign seq                 ├─► [egress] ──► TCP ──► live view
+LIN ───┘                               └─► [egress] ──► TCP ──► cadence monitor
 ```
 
 ## Status
@@ -23,8 +23,8 @@ ThreadSanitizer, against a real SocketCAN interface.
 | Milestone | State |
 |---|---|
 | M1 — working pipeline, per-consumer mutex queues (topology A) | done |
-| M2 — lock-free broadcast ring (topology B) | next |
-| M3 — fan-out failure handling, gap records, split deployment | |
+| M2 — lock-free broadcast ring (topology B) | done |
+| M3 — gap markers, cadence monitor | in progress |
 | M4 — measurement on the Pi | |
 
 ## Try it
@@ -90,8 +90,25 @@ without touching any other consumer. `push` never blocks: a producer that waited
 for space would let one slow consumer stall the entire pipeline.
 
 **Loss.** At-most-once, drop-oldest. Every frame offered is accounted for:
-`pushed == popped + dropped + size`. Consumers detect their own loss from gaps
-in the sequence.
+`pushed == popped + dropped + size`. Loss is *reported*, not inferred: the
+gateway sends a marker naming the first sequence a consumer did not receive and
+how many are missing, because only the gateway can say why they went. A consumer
+also counts sequence jumps that arrive with no marker — under wire version 2
+that must never happen, so it is the check that the mechanism works rather than
+a fallback.
+
+**Why that matters, measured.** The cadence monitor flags a CAN id that stops
+arriving on time, which is unavoidably a measurement of inter-arrival time — so
+loss it does not know about looks exactly like a bus going quiet. Two monitors on
+the same stream at 20k frames/s, one ignoring the markers:
+
+| | anomalies |
+|---|---|
+| gap-aware | 6 |
+| gap-blind (control) | 64 |
+
+Fifty-eight alarms about equipment that was working perfectly. That is what the
+sequence numbers and the version-2 markers buy.
 
 **Protocol.** A documented little-endian binary format
 ([docs/wire-format.md](docs/wire-format.md)), parsed field by field. The receive

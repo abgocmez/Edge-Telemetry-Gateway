@@ -46,6 +46,8 @@ services:
       - recorder:9002
       - --consumer
       - view:9003
+      - --consumer
+      - cadence:9004
 
   # Every consumer reconnects on its own, so compose start order does not matter
   # and a gateway restart is survived rather than being a fatal race. That is the
@@ -98,6 +100,22 @@ services:
       - "9003"
       - --http
       - "8080"
+
+  # The consumer that makes the case for gap markers: it measures inter-arrival
+  # time per CAN id, so loss it does not know about looks exactly like a bus
+  # going quiet. Run it with --gap-blind alongside this one to see the
+  # difference; the same stream produced 64 anomalies blind against 6 aware.
+  cadence:
+    <<: *etg
+    container_name: etg-cadence
+    depends_on: [gateway]
+    command:
+      - etg-cadence
+      - --host
+      - ${ETG_GATEWAY_HOST:-gateway}
+      - --port
+      - "9004"
+      - --reconnect
 
   # Only started with --profile vcan, and only useful together with the vcan
   # override, which is what puts it in the namespace where vcan0 exists.

@@ -33,5 +33,8 @@ target_link_libraries(etg-view PRIVATE etg_core etg_warnings)
 
 # Header-only against the ring, so it builds without Catch2 and can be dropped
 # on the measurement target on its own.
+add_executable(etg-cadence cadence_main.cpp)
+target_link_libraries(etg-cadence PRIVATE etg_core etg_warnings)
+
 add_executable(etg-ringstress ring_stress.cpp)
 target_link_libraries(etg-ringstress PRIVATE etg_core etg_warnings)

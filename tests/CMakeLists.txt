@@ -19,6 +19,7 @@ add_executable(etg_tests
   test_http.cpp
   test_broadcast_ring.cpp
   test_topology.cpp
+  test_cadence.cpp
 )
 target_link_libraries(etg_tests PRIVATE etg_core etg_warnings Catch2::Catch2WithMain)
 

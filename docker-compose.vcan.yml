@@ -71,6 +71,16 @@ services:
       - --http
       - "${ETG_HTTP_PORT:-8080}"
 
+  cadence:
+    network_mode: host
+    command:
+      - etg-cadence
+      - --host
+      - 127.0.0.1
+      - --port
+      - "9004"
+      - --reconnect
+
   generator:
     network_mode: host
     cap_add:
