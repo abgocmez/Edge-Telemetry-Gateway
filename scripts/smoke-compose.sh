@@ -79,8 +79,8 @@ echo "--- live view ---"
 view_json=$(compose exec -T view python3 -c "
 import json, urllib.request
 d = json.loads(urllib.request.urlopen('http://127.0.0.1:${HTTP_PORT}/stats.json').read())
-print(d['connected'], d['frames'], d['gaps'], len(d['ids']))")
-echo "connected/frames/gaps/ids: ${view_json}"
+print(d['connected'], d['frames'], d['markers'], d['silent'], len(d['ids']))")
+echo "connected/frames/markers/silent/ids: ${view_json}"
 
 view_frames=$(echo "$view_json" | awk '{print $2}')
 if [ -z "$view_frames" ] || [ "$view_frames" -lt "$floor" ]; then
