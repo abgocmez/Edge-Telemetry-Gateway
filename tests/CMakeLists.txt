@@ -16,6 +16,7 @@ add_executable(etg_tests
   test_bounded_queue.cpp
   test_fanout.cpp
   test_egress.cpp
+  test_http.cpp
 )
 target_link_libraries(etg_tests PRIVATE etg_core etg_warnings Catch2::Catch2WithMain)
 

@@ -9,9 +9,9 @@ answers **what happens when a consumer cannot keep up, when the producer outruns
 the pipeline, and when a consumer disappears and comes back**.
 
 ```
-vcan0 ─┐
-vcan1 ─┼──► [ingest thread]──► [queue]──► [egress]──► TCP ──► probe
-vcan2 ─┤     assign seq        [queue]──► [egress]──► TCP ──► recorder
+vcan0 ─┐                      [queue]──► [egress]──► TCP ──► probe
+vcan1 ─┼──► [ingest thread]──► [queue]──► [egress]──► TCP ──► recorder
+vcan2 ─┤     assign seq        [queue]──► [egress]──► TCP ──► live view
 LIN ───┘                       one per consumer
 ```
 
@@ -35,6 +35,16 @@ hardware and no `vcan` are needed:
 ```sh
 docker compose up
 ```
+
+Then open **<http://localhost:8080/>** for the live view: rate over the last
+minute, per-CAN-id traffic, sequence gaps, and the most recent frames.
+
+The view is worth one sentence of explanation, because *how* it observes is the
+point. It is a consumer like any other — it connects to a gateway port and
+decodes the documented protocol. There is no debug hook and no side channel, so
+it only sees what a consumer can see. Queue depth, `would_block` and per-consumer
+drop counts live in the gateway and are printed there, because no consumer is
+told about them.
 
 Against a real SocketCAN interface:
 
@@ -112,7 +122,7 @@ Two lessons already paid for:
 ## Layout
 
 ```
-src/        gateway, generator, probe, recorder, and the shared core
+src/        gateway, generator, probe, recorder, live view, and the shared core
 docs/       wire-format.md — normative protocol specification
 scripts/    vcan setup, smoke tests, independent capture parser
 tests/      unit, concurrency and socket tests
@@ -132,3 +142,6 @@ SCOPE.md    locked decisions with reasons, non-goals, milestones, risks
 - The containers share the host network namespace, because `vcan` lives in the
   host's. Separate processes over real sockets, but not yet a boundary between
   machines.
+- The live view's latency panel is a rolling ten-second window, for watching
+  rather than for publishing. Numbers to quote come from `etg-probe --warmup`,
+  which excludes the backlog a consumer inherits on connect.

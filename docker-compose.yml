@@ -49,9 +49,11 @@ services:
       - probe:9001
       - --consumer
       - recorder:9002
+      - --consumer
+      - view:9003
 
-  # Both consumers use --reconnect, so compose start order does not matter and
-  # a gateway restart is survived rather than being a fatal race. That is the
+  # Every consumer reconnects on its own, so compose start order does not matter
+  # and a gateway restart is survived rather than being a fatal race. That is the
   # behaviour under test, not a workaround for it.
   probe:
     <<: *etg
@@ -82,6 +84,22 @@ services:
       - --reconnect
       - --out
       - /data/capture.etg
+
+  # The live view is a consumer like any other: it reaches the gateway only
+  # through the documented protocol, with no debug hook and no side channel.
+  # Open http://localhost:8080/ once the stack is up.
+  view:
+    <<: *etg
+    container_name: etg-view
+    depends_on: [gateway]
+    command:
+      - etg-view
+      - --host
+      - 127.0.0.1
+      - --port
+      - "9003"
+      - --http
+      - "${ETG_HTTP_PORT:-8080}"
 
   # Only started with --profile vcan, because it needs a real CAN interface.
   generator:

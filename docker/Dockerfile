@@ -34,6 +34,7 @@ COPY --from=builder /src/build/src/etg-gateway /usr/local/bin/
 COPY --from=builder /src/build/src/etg-gen     /usr/local/bin/
 COPY --from=builder /src/build/src/etg-probe   /usr/local/bin/
 COPY --from=builder /src/build/src/etg-record  /usr/local/bin/
+COPY --from=builder /src/build/src/etg-view    /usr/local/bin/
 COPY scripts/parse-capture.py /usr/local/bin/
 
 WORKDIR /data
