@@ -35,7 +35,7 @@ jobs:
         run: ctest --test-dir build --output-on-failure --no-tests=error
 
       - name: Smoke
-        run: ./build/src/etg-gateway --seconds 1 --quiet
+        run: ./build/src/etg-gateway --source synth --consumer smoke:9099 --seconds 1
 
       # First test that exercises the generator at all: it needs a CAN
       # interface, which the WSL2 dev kernel cannot provide.
