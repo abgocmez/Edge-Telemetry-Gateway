@@ -55,6 +55,10 @@ void usage() {
                "                         lock-free broadcast ring (default: ring)\n"
                "  --consumer NAME:PORT   serve a consumer on PORT; repeatable\n"
                "  --capacity N           frames per queue, or ring cells (default 8192)\n"
+               "  --batch N              max frames per wire batch (default 256)\n"
+               "  --linger-us N          wait up to N microseconds to fill a batch.\n"
+               "                         0 sends immediately: lowest latency, and one\n"
+               "                         write syscall per frame at low rates\n"
                "  --rate N               synthetic source rate in frames/s (default 1000)\n"
                "  --seconds N            run for N seconds (0 = until interrupted)\n"
                "  --tap                  print every frame; only useful at low rates\n",
@@ -105,6 +109,7 @@ int main(int argc, char** argv) {
   std::vector<ConsumerSpec> consumers;
   std::string topology = "ring";
   std::size_t capacity = 8192;
+  etg::Egress::Batching batching;
   std::uint32_t rate = 1000;
   int seconds = 0;
   bool tap = false;
@@ -125,6 +130,10 @@ int main(int argc, char** argv) {
       consumers.push_back(c);
     } else if ((arg == "--capacity" || arg == "--queue") && has_value) {
       capacity = std::strtoul(argv[++i], nullptr, 10);
+    } else if (arg == "--batch" && has_value) {
+      batching.max_frames = std::strtoul(argv[++i], nullptr, 10);
+    } else if (arg == "--linger-us" && has_value) {
+      batching.linger_us = static_cast<std::uint32_t>(std::strtoul(argv[++i], nullptr, 10));
     } else if (arg == "--rate" && has_value) {
       rate = static_cast<std::uint32_t>(std::strtoul(argv[++i], nullptr, 10));
     } else if (arg == "--seconds" && has_value) {
@@ -203,7 +212,7 @@ int main(int argc, char** argv) {
 
   std::vector<std::unique_ptr<etg::Egress>> egresses;
   for (std::size_t i = 0; i < consumers.size(); ++i) {
-    auto e = etg::Egress::create(consumers[i].name, *feeds[i], consumers[i].port, error);
+    auto e = etg::Egress::create(consumers[i].name, *feeds[i], consumers[i].port, batching, error);
     if (!e) {
       std::fprintf(stderr, "consumer %s: %s\n", consumers[i].name.c_str(), error.c_str());
       return 1;
@@ -245,8 +254,9 @@ int main(int argc, char** argv) {
     fan->start();
   }
 
-  std::fprintf(stderr, "topology %s, %zu source(s), capacity %zu\n", topology.c_str(),
-               source_ptrs.size(), ring ? ring->capacity() : capacity);
+  std::fprintf(stderr, "topology %s, %zu source(s), capacity %zu, batch %zu, linger %uus\n", topology.c_str(),
+               source_ptrs.size(), ring ? ring->capacity() : capacity, batching.max_frames,
+               batching.linger_us);
   for (const auto& s : sources) {
     std::fprintf(stderr, "  source %s\n", std::string{s->name()}.c_str());
   }
@@ -336,7 +346,7 @@ int main(int argc, char** argv) {
     std::fprintf(stderr,
                  "consumer %-10s sent=%llu bytes=%llu batches=%llu dropped=%llu "
                  "would_block=%llu partial=%llu connects=%llu disconnects=%llu "
-                 "gaps_sent=%llu frames_lost=%llu\n",
+                 "gaps_sent=%llu frames_lost=%llu lingered=%llu\n",
                  egresses[i]->name().c_str(), static_cast<unsigned long long>(es.frames_sent),
                  static_cast<unsigned long long>(es.bytes_sent),
                  static_cast<unsigned long long>(es.batches_sent),
@@ -346,7 +356,8 @@ int main(int argc, char** argv) {
                  static_cast<unsigned long long>(es.connects),
                  static_cast<unsigned long long>(es.disconnects),
                  static_cast<unsigned long long>(es.gaps_sent),
-                 static_cast<unsigned long long>(es.frames_lost));
+                 static_cast<unsigned long long>(es.frames_lost),
+                 static_cast<unsigned long long>(es.lingered));
   }
   return 0;
 }

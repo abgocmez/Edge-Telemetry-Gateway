@@ -37,7 +37,11 @@ constexpr std::chrono::milliseconds kPopTimeout{50};
 }  // namespace
 
 std::unique_ptr<Egress> Egress::create(std::string name, ConsumerFeed& feed, std::uint16_t port,
-                                       std::string& error) {
+                                       Batching batching, std::string& error) {
+  if (batching.max_frames == 0 || batching.max_frames > kMaxBatch) {
+    error = "batch size must be between 1 and " + std::to_string(kMaxBatch);
+    return nullptr;
+  }
   const int listen_fd = tcp::listen_on(port, error);
   if (listen_fd < 0) {
     return nullptr;
@@ -53,12 +57,49 @@ std::unique_ptr<Egress> Egress::create(std::string name, ConsumerFeed& feed, std
   // Port 0 means the kernel picked one; report what it actually chose.
   const std::uint16_t bound = tcp::local_port(listen_fd);
   return std::unique_ptr<Egress>{
-      new Egress(std::move(name), feed, bound != 0 ? bound : port, listen_fd, stop_fd)};
+      new Egress(std::move(name), feed, bound != 0 ? bound : port, batching, listen_fd, stop_fd)};
 }
 
-Egress::Egress(std::string name, ConsumerFeed& feed, std::uint16_t port, int listen_fd, int stop_fd)
-    : name_(std::move(name)), feed_(feed), port_(port), listen_fd_(listen_fd), stop_fd_(stop_fd) {
-  pending_.reserve(wire::kHeaderSize + kMaxBatch * wire::kRecordSize);
+Egress::Egress(std::string name, ConsumerFeed& feed, std::uint16_t port, Batching batching,
+               int listen_fd, int stop_fd)
+    : name_(std::move(name)),
+      feed_(feed),
+      port_(port),
+      batching_(batching),
+      listen_fd_(listen_fd),
+      stop_fd_(stop_fd) {
+  pending_.reserve(wire::kHeaderSize + batching_.max_frames * wire::kRecordSize);
+}
+
+std::size_t Egress::coalesce(std::vector<Frame>& batch, std::size_t have) {
+  if (batching_.linger_us == 0 || have >= batching_.max_frames) {
+    return have;
+  }
+
+  const std::uint64_t deadline = monotonic_ns() + batching_.linger_us * 1000ULL;
+  bool waited = false;
+
+  while (have < batching_.max_frames) {
+    const std::uint64_t now = monotonic_ns();
+    if (now >= deadline) {
+      break;
+    }
+    const auto remaining =
+        std::chrono::milliseconds{static_cast<std::int64_t>((deadline - now) / 1'000'000ULL) + 1};
+
+    const std::size_t more = feed_.pop_batch(
+        std::span<Frame>{batch.data() + have, batching_.max_frames - have}, remaining);
+    if (more == 0) {
+      break;
+    }
+    have += more;
+    waited = true;
+  }
+
+  if (waited) {
+    lingered_.fetch_add(1, std::memory_order_relaxed);
+  }
+  return have;
 }
 
 Egress::~Egress() {
@@ -257,7 +298,7 @@ bool Egress::flush_pending() {
 }
 
 void Egress::run() {
-  std::vector<Frame> batch(kMaxBatch);
+  std::vector<Frame> batch(batching_.max_frames);
 
   for (;;) {
     if (!wait_for_client()) {
@@ -276,7 +317,11 @@ void Egress::run() {
       continue;
     }
 
-    const std::size_t n = feed_.pop_batch(std::span<Frame>{batch}, kPopTimeout);
+    std::size_t n = feed_.pop_batch(
+        std::span<Frame>{batch.data(), batching_.max_frames}, kPopTimeout);
+    if (n > 0) {
+      n = coalesce(batch, n);
+    }
     if (n == 0) {
       if (feed_.closed()) {
         return;
@@ -305,6 +350,7 @@ Egress::Stats Egress::stats() const noexcept {
   s.partial_writes = partial_writes_.load(std::memory_order_relaxed);
   s.connects = connects_.load(std::memory_order_relaxed);
   s.disconnects = disconnects_.load(std::memory_order_relaxed);
+  s.lingered = lingered_.load(std::memory_order_relaxed);
   s.gaps_sent = gaps_sent_.load(std::memory_order_relaxed);
   s.frames_lost = frames_lost_.load(std::memory_order_relaxed);
   s.connected = connected_.load(std::memory_order_relaxed);

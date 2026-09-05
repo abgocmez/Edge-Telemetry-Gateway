@@ -30,9 +30,24 @@ namespace etg {
 // what it missed.
 class Egress {
  public:
-  // Frames per wire batch. Larger batches amortise the write syscall and cost
-  // tail latency; this is the knob the M4 sweep turns.
-  static constexpr std::size_t kMaxBatch = 256;
+  // Frames per wire batch, and how long to wait to fill one.
+  //
+  // These are the two halves of the same trade. At raw passthrough there is
+  // almost no CPU work per frame, so the cost is the write syscall: one per
+  // frame at low rates, which is the dominant expense. Coalescing amortises it
+  // and buys throughput; waiting to coalesce costs tail latency directly.
+  //
+  // A linger of zero sends whatever is available immediately, which is the
+  // lowest-latency and least efficient setting. This is deliberately Nagle's
+  // algorithm re-implemented where it can be measured and turned off, rather
+  // than left to the kernel where TCP_NODELAY is the only control.
+  static constexpr std::size_t kDefaultBatch = 256;
+  static constexpr std::size_t kMaxBatch = 4096;
+
+  struct Batching {
+    std::size_t max_frames = kDefaultBatch;
+    std::uint32_t linger_us = 0;
+  };
 
   struct Stats {
     std::uint64_t frames_sent = 0;
@@ -44,11 +59,17 @@ class Egress {
     std::uint64_t disconnects = 0;
     std::uint64_t gaps_sent = 0;    // loss markers emitted to this consumer
     std::uint64_t frames_lost = 0;  // frames those markers accounted for
+    std::uint64_t lingered = 0;     // batches that waited to coalesce
     bool connected = false;
   };
 
   static std::unique_ptr<Egress> create(std::string name, ConsumerFeed& feed, std::uint16_t port,
-                                        std::string& error);
+                                        Batching batching, std::string& error);
+
+  static std::unique_ptr<Egress> create(std::string name, ConsumerFeed& feed, std::uint16_t port,
+                                        std::string& error) {
+    return create(std::move(name), feed, port, Batching{}, error);
+  }
 
   ~Egress();
 
@@ -63,7 +84,12 @@ class Egress {
   [[nodiscard]] const std::string& name() const noexcept { return name_; }
 
  private:
-  Egress(std::string name, ConsumerFeed& feed, std::uint16_t port, int listen_fd, int stop_fd);
+  Egress(std::string name, ConsumerFeed& feed, std::uint16_t port, Batching batching,
+         int listen_fd, int stop_fd);
+
+  // Waits up to the linger budget for more frames, so one write carries more
+  // than one frame. Returns the total now in `batch`.
+  std::size_t coalesce(std::vector<Frame>& batch, std::size_t have);
 
   void run();
   bool wait_for_client();          // returns false when asked to stop
@@ -84,6 +110,7 @@ class Egress {
   std::string name_;
   ConsumerFeed& feed_;
   std::uint16_t port_;
+  Batching batching_;
   int listen_fd_;
   int stop_fd_;
   int client_fd_ = -1;
@@ -115,6 +142,7 @@ class Egress {
   std::atomic<std::uint64_t> partial_writes_{0};
   std::atomic<std::uint64_t> connects_{0};
   std::atomic<std::uint64_t> disconnects_{0};
+  std::atomic<std::uint64_t> lingered_{0};
   std::atomic<std::uint64_t> gaps_sent_{0};
   std::atomic<std::uint64_t> frames_lost_{0};
   std::atomic<bool> connected_{false};
