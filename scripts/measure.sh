@@ -6,6 +6,7 @@
 #   ./scripts/measure.sh linger
 #   ./scripts/measure.sh overload
 #   ./scripts/measure.sh topology
+#   ./scripts/measure.sh sched
 #   ./scripts/measure.sh all
 #
 # Every run captures scripts/measure-env.sh output alongside its numbers, because
@@ -31,6 +32,11 @@ WARMUP="${MEASURE_WARMUP:-3}"
 PORT="${MEASURE_PORT:-9900}"
 OUT_ROOT="${MEASURE_OUT:-results/$(hostname)-$(date +%Y%m%d)}"
 
+# Prepended to both the gateway and the probe, so an experiment can change how
+# they are scheduled without changing what they do. Empty for every experiment
+# but sched.
+LAUNCH=()
+
 for b in etg-gateway etg-probe; do
   if [ ! -x "$BIN/$b" ]; then
     echo "missing binary: $BIN/$b" >&2
@@ -54,14 +60,14 @@ run_once() {
     src_args+=(--source synth)
   done
 
-  "$BIN/etg-gateway" --topology "$topology" "${src_args[@]}" --rate "$rate" \
+  "${LAUNCH[@]}" "$BIN/etg-gateway" --topology "$topology" "${src_args[@]}" --rate "$rate" \
     --capacity "$capacity" --batch "$batch" --linger-us "$linger" \
     --consumer probe:"$PORT" --seconds "$((SECONDS_RUN + 2))" \
     >/dev/null 2>"$run_dir/gateway.log" &
   local gw=$!
   sleep 1
 
-  "$BIN/etg-probe" --port "$PORT" --seconds "$SECONDS_RUN" --warmup "$WARMUP" \
+  "${LAUNCH[@]}" "$BIN/etg-probe" --port "$PORT" --seconds "$SECONDS_RUN" --warmup "$WARMUP" \
     ${stall:+--stall-us "$stall"} >/dev/null 2>"$run_dir/probe.log"
   wait "$gw" 2>/dev/null
 
@@ -210,6 +216,84 @@ exp_topology() {
   } | tee -a "$dir/summary.txt"
 }
 
+# Busy loops at ordinary priority, one per core, to make the scheduler choose.
+# With no contention every policy looks identical and the experiment says
+# nothing.
+LOAD_PIDS=()
+start_load() {
+  local n i
+  n="$(nproc)"
+  for ((i = 0; i < n; i++)); do
+    sh -c 'while :; do :; done' &
+    LOAD_PIDS+=("$!")
+  done
+  sleep 1
+}
+
+stop_load() {
+  local pid
+  for pid in "${LOAD_PIDS[@]:-}"; do
+    [ -n "$pid" ] && kill "$pid" 2>/dev/null
+  done
+  wait 2>/dev/null
+  LOAD_PIDS=()
+  sleep 1
+}
+
+exp_sched() {
+  local dir="$OUT_ROOT/sched"
+  capture_env "$dir"
+  header "scheduling policy under CPU contention"
+
+  if ! command -v chrt >/dev/null 2>&1; then
+    echo "chrt not found (install util-linux); skipping" | tee "$dir/summary.txt"
+    return
+  fi
+  if ! sudo -n true 2>/dev/null; then
+    echo "SCHED_FIFO needs sudo and none is available without a password; skipping"       | tee "$dir/summary.txt"
+    return
+  fi
+
+  printf "%-16s %10s %10s %10s %10s %10s %10s
+" arm p50 p90 p99 p99.9 max lost     | tee "$dir/summary.txt"
+
+  local arm out
+  for arm in idle-other loaded-other loaded-fifo; do
+    case "$arm" in
+      idle-other)   LAUNCH=() ;;
+      loaded-other) LAUNCH=(); start_load ;;
+      loaded-fifo)  LAUNCH=(sudo chrt -f 20 --) ;;
+    esac
+
+    out=$(run_once "$dir/$arm" ring 20000 256 100 8192 "")
+    printf "%-16s %10s %10s %10s %10s %10s %10s
+" "$arm"       "$(us "$(echo "$out" | cut -d" " -f3)")"       "$(us "$(echo "$out" | cut -d" " -f4)")"       "$(us "$(echo "$out" | cut -d" " -f5)")"       "$(us "$(echo "$out" | cut -d" " -f6)")"       "$(us "$(echo "$out" | cut -d" " -f7)")"       "$(echo "$out" | cut -d" " -f9)" | tee -a "$dir/summary.txt"
+
+    [ "$arm" = loaded-fifo ] && stop_load
+  done
+  LAUNCH=()
+
+  {
+    echo
+    echo "Microseconds, and frames lost. One busy loop per core at ordinary"
+    echo "priority in the two loaded arms, so the scheduler has to choose between"
+    echo "the pipeline and work that never yields."
+    echo
+    echo "The gateway and the probe get the same policy in each arm. That is"
+    echo "deliberate: the probe is the instrument, and promoting the gateway while"
+    echo "leaving the probe at ordinary priority would measure how long the"
+    echo "instrument waited to be run. It also means every figure here includes"
+    echo "the probe scheduling delay, in every arm, and is an upper bound on what"
+    echo "the pipeline itself contributes."
+    echo
+    echo "No pinning. The supervisor isolcpus result came from a single-threaded"
+    echo "periodic loop, which is exactly the shape one isolated core suits. This"
+    echo "pipeline runs several ingest and egress threads, and confining them all"
+    echo "to one core would serialise work meant to overlap: a different"
+    echo "experiment, with a predictable and uninteresting answer."
+  } | tee -a "$dir/summary.txt"
+}
+
 # ------------------------------------------------------------------ main ---
 
 case "${1:-all}" in
@@ -217,14 +301,16 @@ case "${1:-all}" in
   linger)   exp_linger ;;
   overload) exp_overload ;;
   topology) exp_topology ;;
+  sched)    exp_sched ;;
   all)
     exp_latency
     exp_linger
     exp_overload
     exp_topology
+    exp_sched
     ;;
   *)
-    echo "usage: $0 [latency|linger|overload|topology|all]" >&2
+    echo "usage: $0 [latency|linger|overload|topology|sched|all]" >&2
     exit 2
     ;;
 esac
