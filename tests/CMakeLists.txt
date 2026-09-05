@@ -13,6 +13,8 @@ add_executable(etg_tests
   test_wire.cpp
   test_source.cpp
   test_samples.cpp
+  test_bounded_queue.cpp
+  test_fanout.cpp
 )
 target_link_libraries(etg_tests PRIVATE etg_core etg_warnings Catch2::Catch2WithMain)
 

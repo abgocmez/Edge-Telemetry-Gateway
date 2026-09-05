@@ -19,6 +19,9 @@ option(ETG_WERROR      "Treat warnings as errors" OFF)
 set(ETG_SANITIZER "none" CACHE STRING "none|asan|tsan|ubsan")
 set_property(CACHE ETG_SANITIZER PROPERTY STRINGS none asan tsan ubsan)
 
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+
 include(cmake/CompilerWarnings.cmake)
 include(cmake/Sanitizers.cmake)
 

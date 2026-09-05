@@ -5,9 +5,10 @@ add_library(etg_core STATIC
   can_source.cpp
   synthetic_source.cpp
   samples.cpp
+  fanout.cpp
 )
 target_include_directories(etg_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(etg_core PRIVATE etg_warnings PUBLIC etg_sanitizers)
+target_link_libraries(etg_core PRIVATE etg_warnings PUBLIC etg_sanitizers Threads::Threads)
 target_compile_definitions(etg_core PRIVATE ETG_VERSION="${PROJECT_VERSION}")
 
 add_executable(etg-gateway main.cpp)

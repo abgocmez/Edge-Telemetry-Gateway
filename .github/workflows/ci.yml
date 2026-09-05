@@ -69,3 +69,30 @@ jobs:
           sleep 1
           cansend vcan0 123#DEADBEEF
           wait %1
+
+  # Separate job because TSan and ASan cannot be combined, and because a
+  # sanitized binary must never be used for a performance number: TSan costs
+  # 5-15x time and 5-10x memory.
+  #
+  # vcan is deliberately not set up here. The CanSource tests are not concurrent,
+  # so they would only add runtime; the build job already covers them.
+  tsan:
+    runs-on: ubuntu-latest
+    env:
+      TSAN_OPTIONS: halt_on_error=1
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake g++
+
+      - name: Configure
+        run: cmake -S . -B build-tsan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DETG_SANITIZER=tsan -DETG_WERROR=ON
+
+      - name: Build
+        run: cmake --build build-tsan
+
+      - name: Test under ThreadSanitizer
+        run: ctest --test-dir build-tsan --output-on-failure
