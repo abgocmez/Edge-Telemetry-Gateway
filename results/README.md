@@ -143,3 +143,74 @@ This is exactly why the environment is captured beside the numbers rather than
 assumed. Fixing it properly means a heatsink, and quantifying it means a
 sustained run with a temperature trace alongside throughput — which is its own
 experiment, not a footnote to this one.
+
+## Split deployment: gateway on the Pi, consumer on another machine
+
+Gateway on the Pi (192.168.1.103, wired), probe on the development machine
+(192.168.1.102), 20 000 frames/s, ring topology, 100 µs linger.
+
+### The link first, because otherwise the gateway gets the credit or the blame
+
+`scripts/link-ceiling.py`, 48 MB each way plus 500 round trips:
+
+| | |
+|---|---|
+| upload | 94.1 Mbit/s |
+| download | 93.8 Mbit/s |
+| RTT p50 | 518 µs |
+| RTT p99 | 2294 µs |
+| RTT max | 12219 µs |
+
+94 Mbit/s is line rate for 100BASE-TX, and **the cap is the development
+machine's adapter**, which negotiated 100 Mbps on a gigabit card — not the Pi's
+USB-attached Ethernet, whose ceiling is roughly twice that. At 56 bytes per
+frame on the wire the link carries about 210 000 frames/s, well above anything
+these experiments offer it.
+
+The RTT half is the more important number: **half the median round trip is
+259 µs**, and the gateway's own latency on the Pi is 60–70 µs. The network path
+is four times larger than the thing being measured.
+
+### What the split run shows
+
+| | |
+|---|---|
+| delivered | 608 172 frames in 30.0 s = 20 272/s |
+| loss | 0 |
+| silent jumps | 0 |
+| protocol errors | 0 |
+| mean batch | 4.1 frames |
+
+Zero loss across a real network to a consumer on another machine, sustained for
+thirty seconds. That is the distributed claim, and it is clock-independent.
+
+### Cross-machine one-way latency is not measurable on this pair
+
+Two independent reasons, both quantified:
+
+**The consumer's clock is not disciplined.** `chronyc sources` on the
+development machine shows `Reach 0` against every server, `Reference ID
+00000000`, stratum 0 and a reference time of 1 January 1970 — chrony has never
+completed a single exchange there, and the clock comes from the Windows host
+through the hypervisor. The Pi's chrony is genuinely synchronised: four sources,
+reach 377, offsets of a few milliseconds. Measured directly, the two
+`CLOCK_REALTIME` clocks differ by **1.19 seconds**.
+
+**Even a perfect clock would not help.** Half the median round trip is 259 µs
+against a 60–70 µs signal.
+
+Attempting it anyway is instructive. Using `CLOCK_MONOTONIC` across the pair
+reported a minimum of **−741 seconds**, which is the difference between two boot
+times and nothing else. The probe reports the minimum rather than clamping it
+for exactly this reason, and it worked: the mistake was unmissable rather than
+plausible. Switching to `CLOCK_REALTIME` with `--cross` narrowed it to −1.05
+seconds, which is the real clock offset and still not a latency.
+
+**So the honest decomposition is to measure the two halves separately**: the
+gateway's own latency on one machine in a single `CLOCK_MONOTONIC` domain, and
+the network's contribution as half the round trip from `link-ceiling.py`. Adding
+them is defensible; subtracting two undisciplined clocks is not.
+
+This is the outcome the scoping session argued about. `chrony` was chosen over
+RTT/2 for cross-machine work; the measurement says RTT/2 was the right call for
+this pair, and the reason has nothing to do with chrony itself.

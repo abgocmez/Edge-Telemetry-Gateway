@@ -62,6 +62,11 @@ void usage() {
                "                   in the payload\n"
                "  --stall-us N     sleep N microseconds per batch, to make this\n"
                "                   consumer deliberately too slow to keep up\n"
+               "  --cross          measure against CLOCK_REALTIME instead, for a\n"
+               "                   gateway on another machine. Check both hosts are\n"
+               "                   disciplined first - chronyc sources, and look for\n"
+               "                   a non-zero Reach - or this reports the offset\n"
+               "                   between two clocks rather than a latency\n"
                "  --csv PATH       write every retained gateway-latency sample\n",
                etg::version().data());
 }
@@ -101,6 +106,7 @@ int main(int argc, char** argv) {
   bool measure_e2e = false;
   int warmup = 0;
   int stall_us = 0;
+  bool cross_machine = false;
 
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -119,6 +125,8 @@ int main(int argc, char** argv) {
       csv_path = argv[++i];
     } else if (arg == "--reconnect") {
       reconnect = true;
+    } else if (arg == "--cross") {
+      cross_machine = true;
     } else if (arg == "--e2e") {
       measure_e2e = true;
     } else if (arg == "--help" || arg == "-h") {
@@ -204,7 +212,17 @@ int main(int argc, char** argv) {
       if (st == etg::FrameStream::Status::kOk) {
         // One reading for the whole batch, which is not an approximation: these
         // frames genuinely did arrive in the same read.
-        const std::uint64_t now = etg::monotonic_ns();
+        // Which clock depends on where the gateway is.
+        //
+        // t_ingest_ns is CLOCK_MONOTONIC, the right choice on one machine: no
+        // steps, no discipline, no NTP. Across machines it is meaningless -
+        // monotonic clocks share no epoch, so subtracting them yields the
+        // difference between two boot times. Measured across this pair it gave
+        // a minimum of -741 seconds, which is why the minimum is reported
+        // rather than clamped. t_kernel_ns is CLOCK_REALTIME, which chrony
+        // disciplines on both hosts, and is the only field comparable at all.
+        const std::uint64_t now =
+            cross_machine ? etg::realtime_ns() : etg::monotonic_ns();
         ++batches;
 
         for (const etg::Frame& f : batch) {
@@ -220,7 +238,8 @@ int main(int argc, char** argv) {
             continue;
           }
 
-          gw_latency.add(static_cast<std::int64_t>(now) - static_cast<std::int64_t>(f.t_ingest_ns));
+          const std::uint64_t stamp = cross_machine ? f.t_kernel_ns : f.t_ingest_ns;
+          gw_latency.add(static_cast<std::int64_t>(now) - static_cast<std::int64_t>(stamp));
           if (measure_e2e) {
             e2e_latency.add(static_cast<std::int64_t>(now) -
                             static_cast<std::int64_t>(payload_timestamp(f)));
@@ -258,7 +277,7 @@ int main(int argc, char** argv) {
                "protocol_errs %llu\n"
                "warmup        %llu samples discarded (first %ds)\n"
                "\n"
-               "latency, nanoseconds (valid only within one CLOCK_MONOTONIC domain):\n",
+               "latency, nanoseconds (%s):\n",
                static_cast<unsigned long long>(frames), elapsed,
                elapsed > 0.0 ? static_cast<double>(frames) / elapsed : 0.0,
                static_cast<unsigned long long>(batches),
@@ -271,7 +290,10 @@ int main(int argc, char** argv) {
                static_cast<unsigned long long>(gaps.stats().silent_lost),
                static_cast<unsigned long long>(reconnects),
                static_cast<unsigned long long>(protocol_errs),
-               static_cast<unsigned long long>(warmup_discarded), warmup);
+               static_cast<unsigned long long>(warmup_discarded), warmup,
+               cross_machine
+                   ? "CLOCK_REALTIME across hosts: accurate only to the clock discipline"
+                   : "CLOCK_MONOTONIC, valid only within one machine");
 
   report("gateway", gw_latency);
   if (measure_e2e) {
