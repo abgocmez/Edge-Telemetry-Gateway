@@ -129,6 +129,46 @@ alignment. Adding it later is the live demonstration of what the wire version by
 - vcan limitation: the kernel timestamp is taken when the frame enters the virtual stack, i.e. when
   the generator wrote it. This measures the loopback path, not a real controller RX path.
 
+## Measurement target, verified
+
+Checked on the actual board with `scripts/pi-check.sh`, not assumed.
+
+| | |
+|---|---|
+| Board | Raspberry Pi 3 Model B Plus Rev 1.3, aarch64 |
+| OS | Debian 13 trixie, kernel 6.18.34+rpt-rpi-v8 |
+| Toolchain | GCC 14.2, CMake 3.31, Ninja 1.12, Docker 26.1 |
+| Cores / memory | 4 / 905 MB |
+| `isolcpus` | `isolcpus=3`, already set |
+| Thermal | 50 C idle, `throttled=0x0` (no undervolt history) |
+| vcan | present; module loads and a frame round-trips |
+| Storage | ext4 on the SD card, **11.7 MB/s** sequential |
+| Network | `wlan0` - wireless |
+
+Consequences that change the plan:
+
+- **The SD card has bandwidth to spare.** 11.7 MB/s is roughly 292k frames/s at
+  40 bytes each, far above anything under test. What will make the recorder the
+  slow consumer is write-latency spikes, not throughput, so the write-duration
+  distribution is the thing to watch and `would_block` is what it should
+  produce. This is a sharper prediction than "the SD card is slow" and it is
+  falsifiable.
+- **chrony over WiFi measured 634 us and 881 us RMS offset on two consecutive
+  runs.** Gateway latency p50 is about 40 us, so cross-machine error would be
+  15-20x the signal, and unstable between runs. The split deployment in M3 needs
+  a cable; wireless is fine as a management link and irrelevant to measurements
+  taken entirely on the Pi.
+- `makestep 1 3` is configured, so a chronyd restart can step the clock during a
+  run. Capture the offset before and after every run.
+- The governor is `ondemand`. `scripts/measure-env.sh perf-on` sets performance
+  for a run and `perf-off` restores it; it is deliberately not made permanent,
+  because an always-performance board runs hotter and reaches its thermal knee
+  sooner, changing the very throttling behaviour M4 exists to measure.
+
+Every published number carries the output of `scripts/measure-env.sh capture`.
+A latency figure without its governor, die temperature, isolated core and clock
+discipline is not a result, because nobody can reproduce it or argue with it.
+
 ## Risks
 
 1. **M2 is the schedule risk.** A correct MP broadcast ring can eat three weeks. M1's mutex queue is
