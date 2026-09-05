@@ -96,3 +96,25 @@ jobs:
 
       - name: Test under ThreadSanitizer
         run: ctest --test-dir build-tsan --output-on-failure
+
+  # Covers the seams the native smoke test cannot: image build, container
+  # boundaries, host-namespace CAN access, and consumers connecting over TCP
+  # from separate containers.
+  #
+  # The image builds on debian:bookworm, which ships GCC 12 - the same compiler
+  # as Raspberry Pi OS bookworm. A failure here means the code would not build
+  # on the measurement target, and finding that out in CI rather than on the Pi
+  # is the whole point of pinning C++20 instead of C++23.
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Bring up vcan0
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y can-utils iproute2 "linux-modules-extra-$(uname -r)"
+          ./scripts/setup-vcan.sh 1
+
+      - name: Compose smoke
+        run: ./scripts/smoke-compose.sh

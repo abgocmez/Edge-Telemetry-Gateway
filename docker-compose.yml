@@ -1,0 +1,104 @@
+# Gateway and its consumers as separate containers.
+#
+#   docker compose up                      synthetic source, works anywhere
+#   ETG_SOURCE=can:vcan0 docker compose --profile vcan up
+#                                          real SocketCAN, needs vcan on the host
+#
+# Networking. Every service runs on the host network namespace, for one reason:
+# vcan is a host kernel module and its interface lives in the host's network
+# namespace, so a container can only see vcan0 by sharing that namespace. Once
+# the gateway is on host networking it cannot publish ports, so the consumers
+# join it there too.
+#
+# Be clear about what that does and does not demonstrate. The processes are
+# genuinely separate, with separate filesystems and lifecycles, and they speak
+# the documented protocol over real TCP sockets. What is *not* demonstrated here
+# is a network boundary between machines - that is M3, where a probe runs on
+# another host over the LAN, and where the clock-domain problem becomes real.
+#
+# vcan must already exist on the host; create it with scripts/setup-vcan.sh.
+# Deliberately not created from inside a container: that would need NET_ADMIN on
+# the host namespace, which is a large privilege to hand a service just to save
+# one command.
+
+x-etg: &etg
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
+  image: etg:local
+  network_mode: host
+  restart: unless-stopped
+
+services:
+  gateway:
+    <<: *etg
+    container_name: etg-gateway
+    # CAP_NET_RAW is what PF_CAN/SOCK_RAW needs. Docker grants it by default;
+    # it is named here so the requirement is visible rather than inherited.
+    cap_add:
+      - NET_RAW
+    command:
+      - etg-gateway
+      - --source
+      - ${ETG_SOURCE:-synth}
+      - --rate
+      - ${ETG_RATE:-5000}
+      - --queue
+      - ${ETG_QUEUE:-8192}
+      - --consumer
+      - probe:9001
+      - --consumer
+      - recorder:9002
+
+  # Both consumers use --reconnect, so compose start order does not matter and
+  # a gateway restart is survived rather than being a fatal race. That is the
+  # behaviour under test, not a workaround for it.
+  probe:
+    <<: *etg
+    container_name: etg-probe
+    depends_on: [gateway]
+    command:
+      - etg-probe
+      - --host
+      - 127.0.0.1
+      - --port
+      - "9001"
+      - --reconnect
+      - --warmup
+      - "2"
+
+  recorder:
+    <<: *etg
+    container_name: etg-recorder
+    depends_on: [gateway]
+    volumes:
+      - etg-data:/data
+    command:
+      - etg-record
+      - --host
+      - 127.0.0.1
+      - --port
+      - "9002"
+      - --reconnect
+      - --out
+      - /data/capture.etg
+
+  # Only started with --profile vcan, because it needs a real CAN interface.
+  generator:
+    <<: *etg
+    container_name: etg-gen
+    profiles: [vcan]
+    restart: "no"
+    cap_add:
+      - NET_RAW
+    command:
+      - etg-gen
+      - --interface
+      - ${ETG_IFACE:-vcan0}
+      - --rate
+      - ${ETG_RATE:-5000}
+      - --seconds
+      - ${ETG_SECONDS:-30}
+
+volumes:
+  etg-data:
