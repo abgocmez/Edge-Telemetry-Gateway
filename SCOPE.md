@@ -1,6 +1,7 @@
 # Edge Telemetry Gateway — Agreed Scope
 
-Status: scope locked, no implementation started.
+Status: M1 complete. M2 (the lock-free broadcast ring) is next.
+See README.md for what runs today.
 Companion project: failsafe supervisor daemon (process death). This project: pipeline overload,
 consumer slowness, and consumer loss.
 
@@ -42,15 +43,15 @@ Durability, WAL, replication. Kubernetes. TLS/auth. Web UI. Exactly-once.
 
 Ordered so each is independently shippable. The cut line can land anywhere.
 
-- **M1 — visibly runs.** vcan0, own timerfd-paced generator as a separate process publishing its
-  own pacing jitter histogram. One source thread. **Two per-consumer mutex + condvar bounded queues**
-  (probe + recorder), fan-out thread copies into both. TCP egress. CMake + Ninja, docker compose up,
-  CI build + smoke test.
-  This is topology A (N copies, locks) in full — a complete, defensible alternative to M2 topology B
-  (1 copy, lock-free broadcast), not a stub. If M2 fails, M1 still stands as an architecture, and M4
-  compares the two designs rather than just mutex-vs-atomics.
-  The M1 recorder is deliberately dumb: append and count. No rotation, no gap records, no fsync
-  policy — all of that is M3.
+- **M1 — visibly runs. DONE.** vcan0, own timerfd-paced generator publishing its own pacing
+  jitter histogram. One source thread. Two per-consumer mutex + condvar bounded queues
+  (probe + recorder), fan-out thread copies into both. TCP egress. CMake + Ninja,
+  docker compose, CI: build, TSan, vcan smoke, compose smoke.
+  This is topology A (N copies, locks) in full — a complete, defensible alternative to M2
+  topology B (1 copy, lock-free broadcast), not a stub. If M2 fails, M1 still stands as an
+  architecture, and M4 compares the two designs rather than just mutex-vs-atomics.
+  The M1 recorder is deliberately dumb: append and count. No rotation, no gap records, no
+  fsync policy — all of that is M3.
 - **M2 — the ring.** Multi-bus, M source threads. Broadcast ring behind M1's interface.
   TSan in CI. Deliberately-broken relaxed-instead-of-release variant. Randomized stress on
   x86_64 and aarch64. Padded vs unpadded throughput.
