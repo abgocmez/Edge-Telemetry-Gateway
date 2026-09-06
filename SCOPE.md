@@ -52,17 +52,25 @@ Ordered so each is independently shippable. The cut line can land anywhere.
   architecture, and M4 compares the two designs rather than just mutex-vs-atomics.
   The M1 recorder is deliberately dumb: append and count. No rotation, no gap records, no
   fsync policy — all of that is M3.
-- **M2 — the ring.** Multi-bus, M source threads. Broadcast ring behind M1's interface.
+- **M2 — the ring. DONE.** Multi-bus, M source threads. Broadcast ring behind M1's interface.
   TSan in CI. Deliberately-broken relaxed-instead-of-release variant. Randomized stress on
   x86_64 and aarch64. Padded vs unpadded throughput.
-- **M3 — fan-out and failure.** Three consumers, independent cursors, reconnect with backoff,
+- **M3 — fan-out and failure. DONE.** Three consumers, independent cursors, reconnect with backoff,
   gap markers on the wire, drop counters by (consumer, reason), SO_RXQ_OVFL for kernel-side drops.
   Split deployment. docker kill and recover.
-- **M4 — the numbers.** Latency distribution, sustained throughput, drop rate vs offered load,
+- **M4 — the numbers. DONE.** Latency distribution, sustained throughput, drop rate vs offered load,
   recovery time after kill, batch-size sweep across the latency/throughput frontier.
   Committed scripts, stated method, stated limitations.
-- **M5 — stretches, in order.** SCHED_FIFO/isolcpus comparison, thermal trace,
-  LIN/HID source, bounded replay. Stop when time runs out.
+- **M5 — stretches, in order.** SCHED_FIFO comparison DONE, thermal trace DONE,
+  cross-machine round-trip latency DONE (wire v3 echo records, added because the
+  one-way attempt proved unmeasurable on this pair). LIN/HID source and bounded
+  replay remain, and are the obvious cut line: both add a second input path
+  rather than saying anything further about concurrency or distribution, which
+  are what this project exists to demonstrate.
+
+  Not planned, and the largest single piece of work in M5: the measurement
+  harness was found to be inflating its own tail, and every number on the target
+  was re-measured. See the trap below.
 
 ## M1 design decisions
 
@@ -235,6 +243,20 @@ The interesting numbers will come from syscalls and the network, not from here.
 - Use the 64-bit OS (`uname -m` -> aarch64). armv7 complicates 64-bit atomic lock-freedom.
 - Never measure performance under TSan (5-15x time, 5-10x memory). Separate CI jobs; TSan does not
   compose with ASan.
+- **The instrument must do bounded work in the path it measures.** This one was not
+  anticipated and cost the most. `etg-probe` printed a progress line once a second and
+  called `Samples::compute` for the median; that copies and sorts everything retained, the
+  retained set grows all run, and the call sat in the read loop being measured. The stall
+  grew with run length and landed entirely in the tail being reported: at 20k frames/s, max
+  21 ms over 12 s and 124 ms over 45 s, from the same pipeline. Removing the sort left a
+  smaller version of the same thing, `std::vector` doubling as it filled, visible as isolated
+  ~100 ms outliers. Two conclusions had already been drawn from the bad tails and both were
+  wrong. Generalisation: any per-interval bookkeeping in a measurement loop must be O(1) or
+  bounded, must not allocate, and short runs will hide the ones that are not.
+- A finding that only appears at one run length is a property of the harness until proven
+  otherwise. The bug above was invisible until a 45-second block contradicted a 12-second one
+  at the same rate on the same board; nothing before that ran long enough to disagree with
+  itself.
 
 ## Concurrency notes
 
