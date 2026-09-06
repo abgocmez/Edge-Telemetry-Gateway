@@ -142,9 +142,15 @@ Raspberry Pi 3 B+, with a stated method and stated limitations.
 
 | | p50 | p99 | max |
 |---|---|---|---|
-| generator pacing error | 7.9 µs | 12.7 µs | 1.05 ms |
-| gateway latency (ingest → consumer) | 19.2 µs | 53.0 µs | 1.21 ms |
-| end-to-end (generator → consumer) | 41.7 µs | 66.8 µs | 1.22 ms |
+| generator pacing error | 14.4 µs | 18.9 µs | 68.0 µs |
+| gateway latency (ingest → consumer) | 45.3 µs | 68.2 µs | 331.9 µs |
+| end-to-end (generator → consumer) | 66.3 µs | 91.0 µs | 858.8 µs |
+
+A shared runner gives a different median every run, so read the shape rather
+than the digits. The maxima are the part that moved for a reason: they were
+1.05 ms, 1.21 ms and 1.22 ms until the consumer stopped sorting its own sample
+buffer inside the loop it was measuring — see the correction at the top of
+[results/](results/).
 
 The generator reports its own pacing error against an absolute schedule, because
 a load generator that cannot prove its output was flat makes every latency
