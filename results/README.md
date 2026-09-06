@@ -398,6 +398,44 @@ sample count, and it was read as evidence of queueing.
 - `throttled=0x80000` (`soft-temp-limit-occurred`) is latched since boot, not a
   statement about these runs; the die was at 60.7 °C.
 
+## What a consumer costs when it dies, and what it costs everyone else
+
+The last item on this project's own measurement list, and two questions rather
+than one. `./scripts/measure.sh recovery` SIGKILLs a consumer ten times with a
+two-second outage between each, while a second consumer on another port is never
+touched. SIGKILL rather than SIGTERM: a consumer that was given the chance to
+shut down tidily is not the case worth measuring.
+
+| | |
+|---|---|
+| connect to first frame | **p50 140.7 µs**, min 119.3 µs, max 1 623.6 µs, n=10 |
+| victim, per the gateway | connects=10, disconnects=10, markers sent=9 |
+| witness, untouched | lost=0, silent jumps=0, connections=1, markers sent=0 |
+| frames dropped for the victim | 306 267, against 476 782 delivered |
+
+Ten kills produce ten reconnects and nine markers, which is right rather than
+off by one: the first connection has no earlier connection to have missed
+anything.
+
+**There is no recovery curve.** A returning consumer's first frame arrives
+140.7 µs after its connection is established, against a steady-state p50 of
+132 µs — it is at full speed immediately. That is worth stating because the
+intuitive model is wrong: the cost of a consumer dying is entirely the frames
+that passed while it was absent, not a slow ramp once it is back. Timed from the
+connection being up, not from process start, since exec and dynamic linking
+belong to whatever restarts the consumer.
+
+The witness line is the one that matters. Across ten kills of its neighbour it
+saw zero markers, zero silent jumps and never reconnected. One consumer dying is
+invisible to the others, which is the whole reason for a per-consumer egress
+thread and an independent cursor rather than a shared position. A design that
+shared one would have shown it here.
+
+The victim's 306 267 dropped frames are not a fault. Two seconds of absence at
+20 000 frames/s is 40 000 frames, ten times over, and the gateway's contract is
+drop-oldest and say so — which is what the nine markers are. The alternative,
+holding them, is how a dead consumer takes the live ones down with it.
+
 ## Does the board getting hot change any of this?
 
 Every figure above comes from a run of twelve to forty-five seconds. The Pi

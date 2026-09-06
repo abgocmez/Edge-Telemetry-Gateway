@@ -7,6 +7,7 @@
 #   ./scripts/measure.sh overload
 #   ./scripts/measure.sh topology
 #   ./scripts/measure.sh sched
+#   ./scripts/measure.sh recovery
 #   ./scripts/measure.sh all
 #
 # Every run captures scripts/measure-env.sh output alongside its numbers, because
@@ -301,6 +302,94 @@ exp_sched() {
   } | tee -a "$dir/summary.txt"
 }
 
+exp_recovery() {
+  local dir="$OUT_ROOT/recovery"
+  capture_env "$dir"
+  header "what a consumer costs when it dies, and what it costs everyone else"
+
+  local cycles="${RECOVERY_CYCLES:-10}"
+  local outage="${RECOVERY_OUTAGE:-2}"
+  local rate=20000
+  local victim_port=$((PORT + 1))
+  local witness_port=$((PORT + 2))
+  mkdir -p "$dir"
+
+  # A second consumer that is never touched. The claim being tested is not just
+  # that the victim comes back, but that its death is invisible to everyone
+  # else - which is the whole reason for per-consumer egress threads and
+  # independent cursors.
+  "$BIN/etg-gateway" --topology ring --source synth --rate "$rate"     --capacity 8192 --batch 256 --linger-us 100     --consumer victim:"$victim_port" --consumer witness:"$witness_port"     --seconds $(( cycles * (2 + outage) + 8 ))     >/dev/null 2>"$dir/gateway.log" &
+  local gw=$!
+  sleep 1
+
+  "$BIN/etg-probe" --port "$witness_port" --reconnect     --seconds $(( cycles * (2 + outage) + 4 )) --warmup 1     >/dev/null 2>"$dir/witness.log" &
+  local witness=$!
+
+  local i
+  for ((i = 1; i <= cycles; i++)); do
+    "$BIN/etg-probe" --port "$victim_port" --seconds 30 --warmup 0       >/dev/null 2>"$dir/victim-$i.log" &
+    local victim=$!
+    sleep 2
+    # SIGKILL, not SIGTERM: a consumer that got the chance to shut down tidily
+    # is not the case worth measuring.
+    kill -9 "$victim" 2>/dev/null
+    wait "$victim" 2>/dev/null
+    sleep "$outage"
+  done
+
+  wait "$witness" 2>/dev/null
+  wait "$gw" 2>/dev/null
+
+  printf "%-26s %s\n" "cycles" "$cycles kills, ${outage}s outage each" | tee "$dir/summary.txt"
+
+  # From the per-connection lines the victims print as it happens. A SIGKILLed
+  # process never reaches its summary, so anything only reported there would be
+  # missing for exactly the case being measured.
+  local ttf n p50 pmin pmax
+  ttf=$(sed -n 's/^first frame \([0-9]*\)ns after connect/\1/p' "$dir"/victim-*.log | sort -n)
+  n=$(echo "$ttf" | grep -c .)
+  pmin=$(echo "$ttf" | head -1)
+  pmax=$(echo "$ttf" | tail -1)
+  p50=$(echo "$ttf" | awk '{v[NR]=$1} END{if(NR)print v[int((NR+1)/2)]}')
+  printf "%-26s p50 %sus, min %sus, max %sus (n=%s)\n" "connect to first frame" \
+    "$(us "${p50:-0}")" "$(us "${pmin:-0}")" "$(us "${pmax:-0}")" "$n" \
+    | tee -a "$dir/summary.txt"
+
+  # The gateway's own counters, which are authoritative about what it did.
+  local v_line w_line
+  v_line=$(grep '^consumer victim' "$dir/gateway.log" | tail -1)
+  w_line=$(grep '^consumer witness' "$dir/gateway.log" | tail -1)
+  local v_conn v_disc v_gaps
+  v_conn=$(echo "$v_line" | sed -n 's/.*connects=\([0-9]*\).*/\1/p')
+  v_disc=$(echo "$v_line" | sed -n 's/.*disconnects=\([0-9]*\).*/\1/p')
+  v_gaps=$(echo "$v_line" | sed -n 's/.*gaps_sent=\([0-9]*\).*/\1/p')
+  printf "%-26s connects=%s disconnects=%s markers_sent=%s\n" "victim, per the gateway" \
+    "${v_conn:-?}" "${v_disc:-?}" "${v_gaps:-?}" | tee -a "$dir/summary.txt"
+
+  local w_lost w_silent w_conn w_gaps
+  w_lost=$(sed -n 's/^markers  *[0-9][0-9]*  *(\([0-9][0-9]*\) frames.*/\1/p' "$dir/witness.log")
+  w_silent=$(sed -n 's/^silent jumps  *\([0-9][0-9]*\).*/\1/p' "$dir/witness.log")
+  w_conn=$(sed -n 's/^connections  *\([0-9][0-9]*\).*/\1/p' "$dir/witness.log")
+  w_gaps=$(echo "$w_line" | sed -n 's/.*gaps_sent=\([0-9]*\).*/\1/p')
+  printf "%-26s lost=%s silent_jumps=%s connections=%s markers_sent=%s\n" "witness, untouched" \
+    "${w_lost:-?}" "${w_silent:-?}" "${w_conn:-?}" "${w_gaps:-?}" | tee -a "$dir/summary.txt"
+
+  {
+    echo
+    echo "The victim is SIGKILLed ten times with a two second outage between"
+    echo "each, while the witness consumer on another port is never touched."
+    echo
+    echo "Connect-to-first-frame is timed from the connection being established,"
+    echo "not from process start: exec and dynamic linking belong to whatever"
+    echo "restarts the consumer, and charging them to the gateway would measure"
+    echo "the wrong thing."
+    echo
+    echo "The witness line is the one that matters. A gateway that stalls, drops"
+    echo "or resequences for its other consumers when one of them dies has not"
+    echo "isolated them, whatever the recovery time says."
+  } | tee -a "$dir/summary.txt"
+}
+
 # ------------------------------------------------------------------ main ---
 
 case "${1:-all}" in
@@ -309,15 +398,17 @@ case "${1:-all}" in
   overload) exp_overload ;;
   topology) exp_topology ;;
   sched)    exp_sched ;;
+  recovery) exp_recovery ;;
   all)
     exp_latency
     exp_linger
     exp_overload
     exp_topology
     exp_sched
+    exp_recovery
     ;;
   *)
-    echo "usage: $0 [latency|linger|overload|topology|sched|all]" >&2
+    echo "usage: $0 [latency|linger|overload|topology|sched|recovery|all]" >&2
     exit 2
     ;;
 esac

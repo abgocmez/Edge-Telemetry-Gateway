@@ -1,0 +1,16 @@
+cycles                     10 kills, 2s outage each
+connect to first frame     p50 140.7us, min 119.3us, max 1623.6us (n=10)
+victim, per the gateway    connects=10 disconnects=10 markers_sent=9
+witness, untouched         lost=0 silent_jumps=0 connections=1 markers_sent=0
+
+The victim is SIGKILLed ten times with a two second outage between
+each, while the witness consumer on another port is never touched.
+
+Connect-to-first-frame is timed from the connection being established,
+not from process start: exec and dynamic linking belong to whatever
+restarts the consumer, and charging them to the gateway would measure
+the wrong thing.
+
+The witness line is the one that matters. A gateway that stalls, drops
+or resequences for its other consumers when one of them dies has not
+isolated them, whatever the recovery time says.

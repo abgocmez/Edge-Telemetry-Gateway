@@ -1,0 +1,60 @@
+connected to 127.0.0.1:9902
+first frame 450779ns after connect
+28177/s total=28177 lost=0 gw_p50=179478ns
+20000/s total=48177 lost=0 gw_p50=164635ns
+20001/s total=68178 lost=0 gw_p50=132603ns
+20000/s total=88178 lost=0 gw_p50=132031ns
+20004/s total=108182 lost=0 gw_p50=167343ns
+20002/s total=128184 lost=0 gw_p50=167760ns
+20002/s total=148186 lost=0 gw_p50=132447ns
+20003/s total=168189 lost=0 gw_p50=132760ns
+20001/s total=188190 lost=0 gw_p50=175520ns
+20001/s total=208191 lost=0 gw_p50=174323ns
+20002/s total=228193 lost=0 gw_p50=136041ns
+20001/s total=248194 lost=0 gw_p50=132187ns
+20001/s total=268195 lost=0 gw_p50=173229ns
+20002/s total=288197 lost=0 gw_p50=163437ns
+20000/s total=308197 lost=0 gw_p50=136458ns
+20003/s total=328200 lost=0 gw_p50=132603ns
+20001/s total=348201 lost=0 gw_p50=164426ns
+20001/s total=368202 lost=0 gw_p50=168645ns
+20003/s total=388205 lost=0 gw_p50=135155ns
+20001/s total=408206 lost=0 gw_p50=132864ns
+20003/s total=428209 lost=0 gw_p50=168228ns
+20002/s total=448211 lost=0 gw_p50=156666ns
+20003/s total=468214 lost=0 gw_p50=137447ns
+20000/s total=488214 lost=0 gw_p50=132916ns
+20003/s total=508217 lost=0 gw_p50=163072ns
+20005/s total=528222 lost=0 gw_p50=157759ns
+20001/s total=548223 lost=0 gw_p50=138489ns
+20002/s total=568225 lost=0 gw_p50=136979ns
+20004/s total=588229 lost=0 gw_p50=155468ns
+20000/s total=608229 lost=0 gw_p50=160468ns
+20001/s total=628230 lost=0 gw_p50=137552ns
+20003/s total=648233 lost=0 gw_p50=133072ns
+20002/s total=668235 lost=0 gw_p50=149062ns
+20003/s total=688238 lost=0 gw_p50=171822ns
+20002/s total=708240 lost=0 gw_p50=138020ns
+20002/s total=728242 lost=0 gw_p50=133854ns
+20002/s total=748244 lost=0 gw_p50=146875ns
+20001/s total=768245 lost=0 gw_p50=164010ns
+20000/s total=788245 lost=0 gw_p50=141041ns
+20002/s total=808247 lost=0 gw_p50=132447ns
+20000/s total=828247 lost=0 gw_p50=131874ns
+20002/s total=848249 lost=0 gw_p50=133489ns
+20001/s total=868250 lost=0 gw_p50=133385ns
+
+frames        887403 in 43.961s = 20185.9/s
+batches       264711 (mean 3.4 frames/batch)
+markers       0  (0 frames, gateway-reported)
+absent        0  (0 frames passed while disconnected)
+silent jumps  0  (0 frames, no marker: a protocol fault)
+connections   1
+protocol_errs 0
+warmup        28172 samples discarded (first 1s)
+
+latency, nanoseconds (CLOCK_MONOTONIC, valid only within one machine):
+gateway  n=859231 (retained 859231, stride 1)
+         min 55104  p50 138333  p90 223958  p99 311300  p99.9 1139786  max 5403415  mean 152358
+connect  n=1 (retained 1, stride 1)
+         min 450779  p50 450779  p90 450779  p99 450779  p99.9 450779  max 450779  mean 450779

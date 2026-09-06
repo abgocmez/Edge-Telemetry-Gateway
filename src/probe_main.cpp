@@ -172,6 +172,9 @@ int main(int argc, char** argv) {
 
   etg::Samples gw_latency;
 
+  // One sample per connection rather than per frame, so it stays small.
+  etg::Samples time_to_first_frame{1U << 12U};
+
   // The once-a-second progress line needs a median, and the obvious way to get
   // one is to ask Samples for it. That was wrong, and wrong in the worst way a
   // measurement tool can be: Samples::compute copies and sorts everything it has
@@ -225,6 +228,13 @@ int main(int argc, char** argv) {
     gaps.reset();
     std::fprintf(stderr, "connected to %s:%u\n", host.c_str(), port);
 
+    // How long a returning consumer waits to hold data again, timed from the
+    // moment the connection is up. Deliberately not from process start: exec and
+    // dynamic linking are a supervisor's problem, and folding them in would
+    // charge the gateway for something it does not control.
+    const std::uint64_t connected_at = etg::monotonic_ns();
+    bool first_frame_seen = false;
+
     while (g_stop == 0 && etg::monotonic_ns() < deadline) {
       const etg::FrameStream::Status st = stream->read_batch(batch, 200);
 
@@ -243,6 +253,19 @@ int main(int argc, char** argv) {
       // to one that cannot.
       if (stall_us > 0 && st == etg::FrameStream::Status::kOk) {
         std::this_thread::sleep_for(std::chrono::microseconds{stall_us});
+      }
+
+      if (st == etg::FrameStream::Status::kOk && !batch.empty() && !first_frame_seen) {
+        first_frame_seen = true;
+        const std::int64_t ttf =
+            static_cast<std::int64_t>(etg::monotonic_ns() - connected_at);
+        time_to_first_frame.add(ttf);
+        // Printed here rather than only in the summary, because the case this
+        // exists to measure is a consumer that is SIGKILLed: it never reaches
+        // its summary, and a number that only survives a graceful exit cannot
+        // measure an ungraceful one.
+        std::fprintf(stderr, "first frame %lldns after connect\n",
+                     static_cast<long long>(ttf));
       }
 
       if (st == etg::FrameStream::Status::kOk) {
@@ -354,6 +377,9 @@ int main(int argc, char** argv) {
                    : "CLOCK_MONOTONIC, valid only within one machine");
 
   report("gateway", gw_latency);
+  if (time_to_first_frame.total() > 0) {
+    report("connect", time_to_first_frame);
+  }
   if (measure_e2e) {
     report("e2e", e2e_latency);
   }

@@ -17,8 +17,10 @@ LIN ───┘                               └─► [egress] ──► TCP 
 
 ## Status
 
-**M1 complete.** The pipeline runs end to end, in containers, under CI, with
-ThreadSanitizer, against a real SocketCAN interface.
+**M1-M5 complete.** The pipeline runs end to end, in containers, under CI, with
+ThreadSanitizer, against a real SocketCAN interface, and every claim it makes
+about latency, loss, back-pressure and recovery is measured on a Raspberry Pi
+3 B+ from committed scripts.
 
 | Milestone | State |
 |---|---|
@@ -26,7 +28,7 @@ ThreadSanitizer, against a real SocketCAN interface.
 | M2 — lock-free broadcast ring (topology B) | done |
 | M3 — gap markers, cadence monitor | done |
 | M4 — measurement on the Pi | done |
-| M5 — cross-machine round-trip latency | done |
+| M5 — cross-machine round-trip latency, scheduling, thermal, recovery | done |
 
 ## Try it
 

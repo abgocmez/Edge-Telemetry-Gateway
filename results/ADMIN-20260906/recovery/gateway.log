@@ -1,0 +1,60 @@
+consumer victim     listening on port 9901
+consumer witness    listening on port 9902
+topology ring, 1 source(s), capacity 8192, batch 256, linger 100us
+  source synth0
+ingest 20068/s total=20068 | victim -- sent=0 drop=0 wblock=0 lag=20068 | witness -- sent=0 drop=0 wblock=0 lag=20068
+ingest 20019/s total=40087 | victim up sent=27338 drop=12749 wblock=2 lag=0 | witness up sent=27370 drop=12713 wblock=0 lag=3
+ingest 20017/s total=60104 | victim up sent=47357 drop=12749 wblock=2 lag=1 | witness up sent=47389 drop=12713 wblock=0 lag=3
+ingest 20021/s total=80125 | victim -- sent=47457 drop=12749 wblock=2 lag=19917 | witness up sent=67409 drop=12713 wblock=0 lag=3
+ingest 20019/s total=100144 | victim -- sent=47457 drop=12749 wblock=2 lag=39935 | witness up sent=87430 drop=12713 wblock=0 lag=1
+ingest 20021/s total=120165 | victim up sent=74803 drop=45358 wblock=2 lag=0 | witness up sent=107451 drop=12713 wblock=0 lag=2
+ingest 20017/s total=140182 | victim up sent=94820 drop=45358 wblock=2 lag=3 | witness up sent=127469 drop=12713 wblock=0 lag=3
+ingest 20019/s total=160201 | victim -- sent=95166 drop=45358 wblock=2 lag=19672 | witness up sent=147488 drop=12713 wblock=0 lag=1
+ingest 20017/s total=180218 | victim -- sent=95166 drop=45358 wblock=2 lag=39689 | witness up sent=167506 drop=12713 wblock=0 lag=0
+ingest 20020/s total=200238 | victim up sent=122265 drop=77965 wblock=4 lag=0 | witness up sent=187525 drop=12713 wblock=0 lag=0
+ingest 20017/s total=220255 | victim up sent=142283 drop=77965 wblock=4 lag=0 | witness up sent=207544 drop=12713 wblock=0 lag=1
+ingest 20020/s total=240275 | victim -- sent=142878 drop=77965 wblock=4 lag=19421 | witness up sent=227562 drop=12713 wblock=0 lag=0
+ingest 20018/s total=260293 | victim -- sent=142878 drop=77965 wblock=4 lag=39439 | witness up sent=247579 drop=12713 wblock=0 lag=0
+ingest 20022/s total=280315 | victim up sent=169743 drop=110558 wblock=4 lag=1 | witness up sent=267602 drop=12713 wblock=0 lag=1
+ingest 20017/s total=300332 | victim up sent=189759 drop=110558 wblock=4 lag=0 | witness up sent=287618 drop=12713 wblock=0 lag=0
+ingest 20019/s total=320351 | victim -- sent=190577 drop=110558 wblock=4 lag=19200 | witness up sent=307638 drop=12713 wblock=0 lag=0
+ingest 20018/s total=340369 | victim -- sent=190577 drop=110558 wblock=4 lag=39219 | witness up sent=327657 drop=12713 wblock=0 lag=1
+ingest 20014/s total=360383 | victim up sent=217195 drop=143172 wblock=5 lag=1 | witness up sent=347670 drop=12713 wblock=0 lag=1
+ingest 20016/s total=380399 | victim up sent=237211 drop=143172 wblock=5 lag=1 | witness up sent=367688 drop=12713 wblock=0 lag=2
+ingest 20019/s total=400418 | victim -- sent=238272 drop=143172 wblock=5 lag=18952 | witness up sent=387704 drop=12713 wblock=0 lag=0
+ingest 20019/s total=420437 | victim -- sent=238272 drop=143172 wblock=5 lag=38972 | witness up sent=407723 drop=12713 wblock=0 lag=1
+ingest 20017/s total=440454 | victim up sent=264650 drop=175782 wblock=5 lag=1 | witness up sent=427743 drop=12713 wblock=0 lag=1
+ingest 20015/s total=460469 | victim up sent=284663 drop=175782 wblock=5 lag=0 | witness up sent=447756 drop=12713 wblock=0 lag=0
+ingest 20020/s total=480489 | victim -- sent=285975 drop=175782 wblock=5 lag=18708 | witness up sent=467776 drop=12713 wblock=0 lag=1
+ingest 20019/s total=500508 | victim -- sent=285975 drop=175782 wblock=5 lag=38726 | witness up sent=487796 drop=12713 wblock=0 lag=1
+ingest 20017/s total=520525 | victim up sent=312086 drop=208410 wblock=6 lag=0 | witness up sent=507812 drop=12713 wblock=0 lag=1
+ingest 20017/s total=540542 | victim up sent=332102 drop=208410 wblock=6 lag=1 | witness up sent=527829 drop=12713 wblock=0 lag=1
+ingest 20019/s total=560561 | victim -- sent=333658 drop=208410 wblock=6 lag=18465 | witness up sent=547847 drop=12713 wblock=0 lag=2
+ingest 20018/s total=580579 | victim -- sent=333658 drop=208410 wblock=6 lag=38483 | witness up sent=567867 drop=12713 wblock=0 lag=1
+ingest 20023/s total=600602 | victim up sent=359562 drop=241010 wblock=6 lag=0 | witness up sent=587887 drop=12713 wblock=0 lag=2
+ingest 20016/s total=620618 | victim up sent=379579 drop=241010 wblock=6 lag=2 | witness up sent=607903 drop=12713 wblock=0 lag=5
+ingest 20020/s total=640638 | victim -- sent=381351 drop=241010 wblock=6 lag=18246 | witness up sent=627926 drop=12713 wblock=0 lag=0
+ingest 20020/s total=660658 | victim -- sent=381351 drop=241010 wblock=6 lag=38265 | witness up sent=647946 drop=12713 wblock=0 lag=1
+ingest 20018/s total=680676 | victim up sent=407006 drop=273637 wblock=6 lag=0 | witness up sent=667963 drop=12713 wblock=0 lag=0
+ingest 20017/s total=700693 | victim up sent=427024 drop=273637 wblock=6 lag=1 | witness up sent=687978 drop=12713 wblock=0 lag=5
+ingest 20020/s total=720713 | victim -- sent=429054 drop=273637 wblock=6 lag=17989 | witness up sent=708000 drop=12713 wblock=0 lag=0
+ingest 20019/s total=740732 | victim -- sent=429054 drop=273637 wblock=6 lag=38009 | witness up sent=728019 drop=12713 wblock=0 lag=0
+ingest 20018/s total=760750 | victim up sent=454446 drop=306267 wblock=6 lag=2 | witness up sent=748038 drop=12713 wblock=0 lag=0
+ingest 20018/s total=780768 | victim up sent=474466 drop=306267 wblock=6 lag=0 | witness up sent=768053 drop=12713 wblock=0 lag=0
+ingest 20018/s total=800786 | victim -- sent=476782 drop=306267 wblock=6 lag=17699 | witness up sent=788072 drop=12713 wblock=0 lag=0
+ingest 20017/s total=820803 | victim -- sent=476782 drop=306267 wblock=6 lag=37719 | witness up sent=808089 drop=12713 wblock=0 lag=4
+ingest 20020/s total=840823 | victim -- sent=476782 drop=306267 wblock=6 lag=57738 | witness up sent=828110 drop=12713 wblock=0 lag=1
+ingest 20017/s total=860840 | victim -- sent=476782 drop=306267 wblock=6 lag=77755 | witness up sent=848128 drop=12713 wblock=0 lag=0
+ingest 20015/s total=880855 | victim -- sent=476782 drop=306267 wblock=6 lag=97770 | witness up sent=868143 drop=12713 wblock=0 lag=1
+ingest 20019/s total=900874 | victim -- sent=476782 drop=306267 wblock=6 lag=117789 | witness -- sent=887406 drop=12713 wblock=0 lag=757
+ingest 20017/s total=920891 | victim -- sent=476782 drop=306267 wblock=6 lag=137806 | witness -- sent=887406 drop=12713 wblock=0 lag=20774
+ingest 20016/s total=940907 | victim -- sent=476782 drop=306267 wblock=6 lag=157823 | witness -- sent=887406 drop=12713 wblock=0 lag=40791
+ingest 20018/s total=960925 | victim -- sent=476782 drop=306267 wblock=6 lag=177840 | witness -- sent=887406 drop=12713 wblock=0 lag=60808
+
+shutting down
+
+topology ring
+source   synth0     frames=960929 kernel_drops=0 read_errors=0
+ingest   frames=960929 batches=953204 threads=1 claim_retries=0
+consumer victim     sent=476782 bytes=20776328 batches=106543 dropped=306267 would_block=6 partial=4 connects=10 disconnects=10 gaps_sent=9 frames_lost=0 lingered=106217
+consumer witness    sent=887406 bytes=39731632 batches=264712 dropped=12713 would_block=0 partial=0 connects=1 disconnects=1 gaps_sent=0 frames_lost=0 lingered=264663
