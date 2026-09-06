@@ -44,8 +44,8 @@ minute, per-CAN-id traffic, sequence gaps, and the most recent frames.
 
 ![The live view: 3001 frames/s from two virtual CAN buses, six ids, no loss](docs/images/live-view.png)
 
-Above is a fifteen-minute run on the Raspberry Pi 3 B+: two `vcan` interfaces
-driven by `cangen` at six different periods, 2.65 million frames delivered to
+Above is a twenty-minute run on the Raspberry Pi 3 B+: two `vcan` interfaces
+driven by `cangen` at six different periods, 3.56 million frames delivered to
 three consumers with no loss markers and nothing missing. The `src` column is
 the part worth looking at — ids from bus 0 and bus 1 interleaved under one
 unbroken sequence, which is the whole reason the ring accepts several producers.
