@@ -8,6 +8,11 @@ Where a supervisor daemon answers *what happens when a process dies*, this
 answers **what happens when a consumer cannot keep up, when the producer outruns
 the pipeline, and when a consumer disappears and comes back**.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-dark.svg">
+  <img alt="Two CAN buses feed ingest threads that claim cells in a shared broadcast ring with a compare-and-swap. Three consumers in separate containers each read the same cells through their own cursor over TCP; a cursor that falls a full lap behind is overwritten, counted as drop-oldest and reported to that consumer as a gap marker." src="docs/images/architecture-light.svg">
+</picture>
+
 ```
 vcan0 ─┐                              ┌─► [egress] ──► TCP ──► probe
 vcan1 ─┼─► [ingest] ─► [ring or queue] ┼─► [egress] ──► TCP ──► recorder
