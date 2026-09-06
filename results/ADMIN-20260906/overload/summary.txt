@@ -1,0 +1,9 @@
+rate         delivered         lost       loss %        p99
+5000             53300            0        0.00% 2333880.2us
+20000           131276        48723       27.07% 3777358.3us
+50000           172493       399134       69.82% 1174171.2us
+100000          231670       962425       80.60%  971149.5us
+200000          371494      1914674       83.75%  711186.5us
+The consumer stalls 300us per batch throughout, so this measures what the
+pipeline does when a consumer is definitively too slow - not how fast the
+pipeline can go.

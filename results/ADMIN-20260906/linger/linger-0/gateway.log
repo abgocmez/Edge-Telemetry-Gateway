@@ -1,0 +1,24 @@
+consumer probe      listening on port 9900
+topology ring, 1 source(s), capacity 8192, batch 256, linger 0us
+  source synth0
+ingest 20059/s total=20059 | probe -- sent=0 drop=0 wblock=0 lag=20062
+ingest 20020/s total=40079 | probe up sent=27678 drop=12401 wblock=0 lag=0
+ingest 20015/s total=60094 | probe up sent=47693 drop=12401 wblock=0 lag=0
+ingest 20014/s total=80108 | probe up sent=67707 drop=12401 wblock=0 lag=0
+ingest 20021/s total=100129 | probe up sent=87727 drop=12401 wblock=0 lag=2
+ingest 20017/s total=120146 | probe up sent=107745 drop=12401 wblock=0 lag=0
+ingest 20018/s total=140164 | probe up sent=127763 drop=12401 wblock=0 lag=0
+ingest 20020/s total=160184 | probe up sent=147783 drop=12401 wblock=0 lag=0
+ingest 20022/s total=180206 | probe up sent=167806 drop=12401 wblock=0 lag=0
+ingest 20014/s total=200220 | probe up sent=187820 drop=12401 wblock=0 lag=0
+ingest 20018/s total=220238 | probe up sent=207837 drop=12401 wblock=0 lag=0
+ingest 20015/s total=240253 | probe up sent=227853 drop=12401 wblock=0 lag=0
+ingest 20020/s total=260273 | probe -- sent=247613 drop=12401 wblock=0 lag=261
+ingest 20017/s total=280290 | probe -- sent=247613 drop=12401 wblock=0 lag=20278
+
+shutting down
+
+topology ring
+source   synth0     frames=280294 kernel_drops=0 read_errors=0
+ingest   frames=280294 batches=279908 threads=1 claim_retries=0
+consumer probe      sent=247613 bytes=13662696 batches=234886 dropped=12401 would_block=0 partial=0 connects=1 disconnects=1 gaps_sent=0 frames_lost=0 lingered=0

@@ -1,0 +1,10 @@
+linger      frames/batch        p50        p99     writes/s
+0us                  1.1      72.7us     118.3us        18182
+100us                3.1     132.8us     233.9us         6452
+250us                6.2     229.6us     368.7us         3226
+500us               11.4     338.0us     607.2us         1754
+1000us              21.8     593.3us    1106.2us          917
+2500us              52.9    1370.2us    2653.2us          378
+5000us             104.1    2677.4us    5176.7us          192
+writes/s is the offered rate divided by the mean batch, i.e. the write
+syscall rate the coalescing actually achieved.

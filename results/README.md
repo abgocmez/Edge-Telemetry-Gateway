@@ -4,6 +4,11 @@ Everything here is produced by `scripts/measure.sh` and carries the output of
 `scripts/measure-env.sh capture` beside it. Each experiment directory holds a
 `summary.txt`, an `env.txt`, and the raw gateway and probe logs for every run.
 
+`ADMIN-20260906/` holds the numbers quoted below. `ADMIN-20260905/` is kept
+deliberately: it is the same experiments measured with the instrument bug
+described in the next section, and the two directories side by side are the
+evidence for that correction rather than a claim about it.
+
 ## Method
 
 - **Source.** The synthetic in-process generator, not vcan. The offered rate is
@@ -18,9 +23,13 @@ Everything here is produced by `scripts/measure.sh` and carries the output of
   queued before it existed — their measured latency is the age of the buffer,
   not the behaviour of the pipeline. Without this the tail is
   `queue_depth / rate` and says nothing about the system.
-- **Governor.** Runs are taken with `measure-env.sh perf-on`. It is not made
-  permanent: an always-performance board runs hotter and reaches its thermal
-  knee sooner, which would change the very throttling behaviour worth measuring.
+- **Governor.** These runs use the board's default `ondemand`, recorded in every
+  `env.txt`. `measure-env.sh perf-on` exists and pins `performance`, but leaving
+  it off is the more honest default here and two findings below turn on it: a
+  nearly idle board drops its clock and sleeps its cores, which is why 2 000
+  frames/s is slower than 20 000 and why a contended pipeline beats an idle one.
+  Pinning `performance` would erase both effects and also run the board hotter,
+  changing the thermal behaviour the last section measures.
 
 ## What these numbers are not
 
@@ -82,24 +91,23 @@ synthetic source. Full provenance in each experiment's `env.txt`.
 
 ### The median is flat until the pipeline runs out of room
 
+Ring topology; the queue is within noise of it at every rate.
+
 | rate | p50 | p90 | p99 | p99.9 | max |
 |---|---|---|---|---|---|
-| 2 000/s | 114.8 µs | 125.3 µs | 144.3 µs | 214.5 µs | 4 608.8 µs |
-| 20 000/s | 65.9 µs | 72.2 µs | 118.2 µs | 163.0 µs | 2 835.3 µs |
-| 100 000/s | 61.7 µs | 79.6 µs | 1 690.9 µs | 4 586.1 µs | 11 310.9 µs |
+| 2 000/s | 114.2 µs | 126.0 µs | 151.5 µs | 191.0 µs | 254.5 µs |
+| 20 000/s | 66.2 µs | 79.8 µs | 121.0 µs | 189.2 µs | 2 410.1 µs |
+| 100 000/s | 70.1 µs | 86.0 µs | 101.1 µs | 1 283.7 µs | 3 635.3 µs |
 
-Both topologies behave the same way here, within noise.
-
-The 2 000/s row is slower than the 20 000/s row at every percentile, which looks
+The 2 000/s row is slower than the 20 000/s row through p90, which looks
 backwards and is not. The governor is `ondemand`: at 2 000 frames/s the board is
 nearly idle, so it drops the clock and lets cores enter idle states, and every
 wake-up pays to come back. Ten times the work arrives *sooner* because the
-machine is already awake. The same effect shows up again under contention in the
-scheduling experiment, where a loaded pipeline beats an idle one.
+machine is already awake. The same effect shows up again in the scheduling
+experiment, where a loaded pipeline beats an idle one.
 
-Only at 100 000/s does a real tail appear, and there it is queueing: the board
-is close enough to its service capacity that a burst builds a backlog and the
-frames behind it wait for the drain.
+It also has the flattest tail of the three, because at that rate nothing ever
+queues. What the higher rates buy in wake-up latency they pay back at p99.9.
 
 Four 500 kbit/s CAN buses produce on the order of 16 000 frames/s, so the middle
 row is already past anything this gateway would see in the role it was built
@@ -109,17 +117,18 @@ for.
 
 | linger | frames/batch | p50 | p99 | write syscalls/s |
 |---|---|---|---|---|
-| 0 | 1.1 | 72.5 µs | 121.8 µs | 18 182 |
-| 100 µs | 3.2 | 133.6 µs | 233.6 µs | 6 250 |
-| 250 µs | 6.2 | 229.5 µs | 368.7 µs | 3 226 |
-| 500 µs | 11.5 | 340.3 µs | 677.2 µs | 1 739 |
-| 1000 µs | 21.8 | 593.7 µs | 1 143.6 µs | 917 |
-| 2500 µs | 52.9 | 1 365.7 µs | 2 652.0 µs | 378 |
-| 5000 µs | 104.0 | 2 678.0 µs | 5 177.6 µs | 192 |
+| 0 | 1.1 | 72.7 µs | 118.3 µs | 18 182 |
+| 100 µs | 3.1 | 132.8 µs | 233.9 µs | 6 452 |
+| 250 µs | 6.2 | 229.6 µs | 368.7 µs | 3 226 |
+| 500 µs | 11.4 | 338.0 µs | 607.2 µs | 1 754 |
+| 1000 µs | 21.8 | 593.3 µs | 1 106.2 µs | 917 |
+| 2500 µs | 52.9 | 1 370.2 µs | 2 653.2 µs | 378 |
+| 5000 µs | 104.1 | 2 677.4 µs | 5 176.7 µs | 192 |
 
 Waiting to coalesce buys syscalls and costs latency, in a straight line, at both
 percentiles. A hundredfold reduction in write syscalls costs about twenty times
-the p50.
+the p50. This sweep reproduces to within 2% across runs, which is more than can
+be said for the two below.
 
 **This retracts a previous finding.** An earlier version of this file reported
 that on the Pi the curve turned over -- that a 100 µs linger made p99 3.7 times
@@ -134,20 +143,25 @@ other, and the reason to raise it is syscall rate, not tail latency.
 
 | offered | delivered | lost | loss | p99 |
 |---|---|---|---|---|
-| 5 000/s | 53 233 | 0 | 0.00% | 2 297 ms |
-| 20 000/s | 107 658 | 109 667 | 50.46% | 1 784 ms |
-| 50 000/s | 173 597 | 391 894 | 69.30% | 1 213 ms |
-| 100 000/s | 236 245 | 922 444 | 79.61% | 966 ms |
-| 200 000/s | 392 498 | 1 960 773 | 83.32% | **697 ms** |
+| 5 000/s | 53 300 | 0 | 0.00% | 2 334 ms |
+| 20 000/s | 131 276 | 48 723 | 27.07% | 3 777 ms |
+| 50 000/s | 172 493 | 399 134 | 69.82% | 1 174 ms |
+| 100 000/s | 231 670 | 962 425 | 80.60% | 971 ms |
+| 200 000/s | 371 494 | 1 914 674 | 83.75% | **711 ms** |
 
 The consumer stalls 300 µs per batch throughout, so this is what the pipeline
 does when a consumer is definitively too slow, not how fast it can go.
 
-Loss rises with load, as expected. Latency does not: it falls monotonically as
+Loss rises with load, as expected. Latency does not: past the peak it falls as
 loss rises. That is drop-oldest working as designed -- the more aggressively
 stale frames are discarded, the younger the survivors are when they arrive. A
 pipeline that buffered instead of dropping would deliver everything, eventually,
 and every frame would be worthless by then.
+
+Where the peak sits moves between runs: 20 000/s here, 5 000/s in the previous
+run, and the loss at 20 000/s was 27% here against 50% there. The high-load rows
+are stable and the trend across them is the finding; the exact turnover point is
+not.
 
 The 5 000/s row is the one to read carefully: zero loss and 2.3 seconds of
 latency. Nothing was dropped because an 8192-deep buffer at that rate holds 1.6
@@ -157,16 +171,22 @@ seconds of traffic, so the delay is the buffer, not the pipeline.
 
 | topology | sources | sent | dropped | delivered |
 |---|---|---|---|---|
-| queue | 1 | 156 204 | 185 696 | 45.7% |
-| ring | 1 | 167 990 | 147 182 | 53.3% |
-| queue | 4 | 388 480 | 1 004 600 | **27.9%** |
-| ring | 4 | 659 082 | 621 949 | **51.4%** |
+| queue | 1 | 261 856 | 80 266 | 76.5% |
+| ring | 1 | 168 220 | 147 000 | 53.4% |
+| queue | 4 | 353 210 | 1 039 927 | **25.4%** |
+| ring | 4 | 579 507 | 709 676 | **45.0%** |
 
-With four sources the ring delivers nearly twice as much of the same offered
-load. With one it is ahead by rather less, and that margin is the least
-trustworthy number in this file: a single run of a saturated pipeline, where
-what gets dropped depends on scheduling accidents. The four-source gap is large
-enough and mechanical enough to stand on.
+With four sources the ring delivers about 1.8 times as much of the same offered
+load, and it did so in both runs -- 45.0% against 25.4% here, 51.4% against
+27.9% before.
+
+The one-source rows are worth nothing, and this run demonstrates why rather than
+merely asserting it. The previous version of this file flagged them as the least
+trustworthy numbers in the file: a single run of a saturated pipeline where what
+survives depends on scheduling accidents. This run reversed them outright, from
+ring ahead 53.3% to 45.7% into queue ahead 76.5% to 53.4%. Neither ordering means
+anything. The four-source gap is large, mechanical and reproducible; the
+one-source gap is a coin.
 
 Topology A is not slow by accident. Order in a queue is push order, so it cannot
 spread ingest across threads without handing a consumer sequences out of order --
@@ -324,14 +344,14 @@ every policy looks identical and the experiment answers nothing. Microseconds:
 
 | arm | p50 | p90 | p99 | p99.9 | max |
 |---|---|---|---|---|---|
-| idle, `SCHED_OTHER` | 133.7 | 187.7 | 229.5 | 290.2 | 3 134.3 |
-| loaded, `SCHED_OTHER` | 206.6 | 420.9 | **5 087.4** | **8 671.9** | 12 126.5 |
-| loaded, `SCHED_FIFO` 20 | 124.2 | 176.8 | **226.2** | **245.3** | 2 855.8 |
-| loaded, `SCHED_FIFO` + `mlockall` | 124.2 | 177.2 | 226.8 | 248.9 | 3 788.0 |
+| idle, `SCHED_OTHER` | 133.2 | 187.9 | 236.2 | 446.4 | 1 540.3 |
+| loaded, `SCHED_OTHER` | 247.2 | 2 518.9 | **4 638.2** | **5 948.8** | 9 346.5 |
+| loaded, `SCHED_FIFO` 20 | 124.2 | 177.2 | **226.6** | **240.5** | 297.2 |
+| loaded, `SCHED_FIFO` + `mlockall` | 124.1 | 177.4 | 226.5 | 237.1 | 400.8 |
 
 No frames were lost in any arm.
 
-Contention costs 22x at p99 and 30x at p99.9. `SCHED_FIFO` gives all of it back,
+Contention costs 20x at p99 and 13x at p99.9. `SCHED_FIFO` gives all of it back,
 across the whole distribution rather than just the middle of it: every
 percentile under contention at real-time priority is at or below the idle
 figure at ordinary priority.
@@ -376,4 +396,43 @@ sample count, and it was read as evidence of queueing.
   confining several ingest and egress threads to one core would serialise work
   meant to overlap.
 - `throttled=0x80000` (`soft-temp-limit-occurred`) is latched since boot, not a
-  statement about these runs; the die was at 53.7 °C.
+  statement about these runs; the die was at 60.7 °C.
+
+## Does the board getting hot change any of this?
+
+Every figure above comes from a run of twelve to forty-five seconds. The Pi
+reports `throttled=0x80000` -- `soft-temp-limit-occurred` -- latched since boot,
+so the firmware has dropped the clock at some point, and a short measurement may
+simply never have been running when it happened. A gateway in a cabinet runs for
+weeks. `./scripts/thermal.sh` runs thirty 45-second blocks back to back at
+20 000 frames/s, 23 minutes in total, and reads the die temperature, ARM clock
+and throttle word immediately before each one.
+
+| | across 30 blocks |
+|---|---|
+| die temperature | 58.0 – 63.4 °C |
+| ARM clock | 1100 – 1300 MHz |
+| p50 | 131.9 – 136.2 µs |
+| p90 | 187.4 – 188.3 µs |
+| p99 | 228.5 – 243.5 µs |
+| p99.9 | 273.5 – 425.6 µs (28 blocks), 811.5 and 1074.7 µs in two |
+
+Nothing moves. The clock swings by 18% across the run and p50 answers with 1.3%,
+p90 with 0.5%. The first block was actively throttling -- `0x80008`, the
+current-state bit, at 63.4 °C -- and its numbers are indistinguishable from the
+other twenty-nine.
+
+That is not the board coping; it is the workload not being clock-bound. At
+20 000 frames/s this pipeline spends its time waiting to be woken and making
+syscalls, not computing, and neither cost scales with core frequency. It would
+be a different answer at 100 000/s, where the rate sweep shows the pipeline
+actually running out of room.
+
+So the short runs elsewhere in this file are not flattered by a cool board. They
+would be, at a rate high enough to be CPU-bound; they are not at this one.
+
+This trace is also where the measurement bug surfaced, and the clearest
+before-and-after of it. The same script on the same board reported p99 of 86 ms
+and p99.9 of 123 ms with the old probe, from the same pipeline, because 45
+seconds was long enough for the instrument's own sorting to dominate everything
+it reported.

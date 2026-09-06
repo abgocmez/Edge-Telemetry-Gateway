@@ -1,0 +1,30 @@
+consumer probe      listening on port 9900
+topology queue, 4 source(s), capacity 8192, batch 256, linger 0us
+  source synth0
+  source synth1
+  source synth2
+  source synth3
+ingest 100269/s total=100269 | probe -- sent=0 drop=92089 wblock=0 lag=8192
+ingest 100081/s total=200350 | probe up sent=34632 drop=157279 wblock=14 lag=8192
+ingest 100079/s total=300429 | probe up sent=58314 drop=234859 wblock=29 lag=7008
+ingest 100080/s total=400509 | probe up sent=93478 drop=298845 wblock=46 lag=8192
+ingest 100080/s total=500589 | probe up sent=117091 drop=375058 wblock=60 lag=8192
+ingest 100076/s total=600665 | probe up sent=152943 drop=439776 wblock=78 lag=7699
+ingest 100080/s total=700745 | probe up sent=173496 drop=518809 wblock=91 lag=8192
+ingest 100081/s total=800826 | probe up sent=212053 drop=580588 wblock=108 lag=8192
+ingest 100084/s total=900910 | probe up sent=235735 drop=656736 wblock=122 lag=8192
+ingest 100081/s total=1000991 | probe up sent=268813 drop=732184 wblock=139 lag=1
+ingest 100083/s total=1101074 | probe up sent=293835 drop=798799 wblock=154 lag=8192
+ingest 100083/s total=1201157 | probe up sent=317423 drop=876290 wblock=169 lag=7196
+ingest 100078/s total=1301235 | probe -- sent=353210 drop=941591 wblock=186 lag=6441
+ingest 100082/s total=1401317 | probe -- sent=353210 drop=1039921 wblock=186 lag=8192
+
+shutting down
+
+topology queue
+source   synth0     frames=350333 kernel_drops=0 read_errors=0
+source   synth1     frames=350333 kernel_drops=0 read_errors=0
+source   synth2     frames=350333 kernel_drops=0 read_errors=0
+source   synth3     frames=350332 kernel_drops=0 read_errors=0
+ingest   frames=1401331 batches=1400136 threads=1
+consumer probe      sent=353210 bytes=14885080 batches=47141 dropped=1039927 would_block=186 partial=112 connects=1 disconnects=1 gaps_sent=59 frames_lost=847070 lingered=0

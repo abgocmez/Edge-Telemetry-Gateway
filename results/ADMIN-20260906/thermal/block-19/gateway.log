@@ -1,0 +1,57 @@
+consumer probe      listening on port 9901
+topology ring, 1 source(s), capacity 8192, batch 256, linger 100us
+  source synth0
+ingest 20056/s total=20056 | probe -- sent=0 drop=0 wblock=0 lag=20059
+ingest 20017/s total=40073 | probe up sent=27662 drop=12412 wblock=0 lag=1
+ingest 20019/s total=60092 | probe up sent=47679 drop=12412 wblock=0 lag=0
+ingest 20019/s total=80111 | probe up sent=67700 drop=12412 wblock=0 lag=0
+ingest 20017/s total=100128 | probe up sent=87716 drop=12412 wblock=0 lag=1
+ingest 20020/s total=120148 | probe up sent=107736 drop=12412 wblock=0 lag=0
+ingest 20018/s total=140166 | probe up sent=127753 drop=12412 wblock=0 lag=0
+ingest 20017/s total=160183 | probe up sent=147770 drop=12412 wblock=0 lag=2
+ingest 20017/s total=180200 | probe up sent=167788 drop=12412 wblock=0 lag=1
+ingest 20016/s total=200216 | probe up sent=187805 drop=12412 wblock=0 lag=0
+ingest 20016/s total=220232 | probe up sent=207821 drop=12412 wblock=0 lag=0
+ingest 20019/s total=240251 | probe up sent=227837 drop=12412 wblock=0 lag=1
+ingest 20017/s total=260268 | probe up sent=247856 drop=12412 wblock=0 lag=1
+ingest 20016/s total=280284 | probe up sent=267872 drop=12412 wblock=0 lag=1
+ingest 20016/s total=300300 | probe up sent=287888 drop=12412 wblock=0 lag=1
+ingest 20018/s total=320318 | probe up sent=307905 drop=12412 wblock=0 lag=0
+ingest 20018/s total=340336 | probe up sent=327925 drop=12412 wblock=0 lag=0
+ingest 20018/s total=360354 | probe up sent=347939 drop=12412 wblock=0 lag=1
+ingest 20018/s total=380372 | probe up sent=367958 drop=12412 wblock=0 lag=1
+ingest 20016/s total=400388 | probe up sent=387976 drop=12412 wblock=0 lag=2
+ingest 20018/s total=420406 | probe up sent=407994 drop=12412 wblock=0 lag=1
+ingest 20017/s total=440423 | probe up sent=428011 drop=12412 wblock=0 lag=0
+ingest 20017/s total=460440 | probe up sent=448028 drop=12412 wblock=0 lag=1
+ingest 20017/s total=480457 | probe up sent=468044 drop=12412 wblock=0 lag=0
+ingest 20017/s total=500474 | probe up sent=488061 drop=12412 wblock=0 lag=0
+ingest 20016/s total=520490 | probe up sent=508077 drop=12412 wblock=0 lag=1
+ingest 20017/s total=540507 | probe up sent=528093 drop=12412 wblock=0 lag=0
+ingest 20016/s total=560523 | probe up sent=548111 drop=12412 wblock=0 lag=1
+ingest 20019/s total=580542 | probe up sent=568129 drop=12412 wblock=0 lag=0
+ingest 20018/s total=600560 | probe up sent=588148 drop=12412 wblock=0 lag=0
+ingest 20016/s total=620576 | probe up sent=608163 drop=12412 wblock=0 lag=0
+ingest 20017/s total=640593 | probe up sent=628182 drop=12412 wblock=0 lag=0
+ingest 20018/s total=660611 | probe up sent=648200 drop=12412 wblock=0 lag=0
+ingest 20017/s total=680628 | probe up sent=668216 drop=12412 wblock=0 lag=1
+ingest 20018/s total=700646 | probe up sent=688231 drop=12412 wblock=0 lag=3
+ingest 20018/s total=720664 | probe up sent=708250 drop=12412 wblock=0 lag=0
+ingest 20015/s total=740679 | probe up sent=728267 drop=12412 wblock=0 lag=1
+ingest 20017/s total=760696 | probe up sent=748284 drop=12412 wblock=0 lag=0
+ingest 20017/s total=780713 | probe up sent=768299 drop=12412 wblock=0 lag=1
+ingest 20015/s total=800728 | probe up sent=788314 drop=12412 wblock=0 lag=0
+ingest 20016/s total=820744 | probe up sent=808331 drop=12412 wblock=0 lag=2
+ingest 20018/s total=840762 | probe up sent=828349 drop=12412 wblock=0 lag=1
+ingest 20017/s total=860779 | probe up sent=848367 drop=12412 wblock=0 lag=0
+ingest 20016/s total=880795 | probe up sent=868382 drop=12412 wblock=0 lag=0
+ingest 20017/s total=900812 | probe up sent=888398 drop=12412 wblock=0 lag=1
+ingest 20018/s total=920830 | probe -- sent=907632 drop=12412 wblock=0 lag=789
+ingest 20017/s total=940847 | probe -- sent=907632 drop=12412 wblock=0 lag=20806
+
+shutting down
+
+topology ring
+source   synth0     frames=940852 kernel_drops=0 read_errors=0
+ingest   frames=940852 batches=939225 threads=1 claim_retries=0
+consumer probe      sent=907632 bytes=41041792 batches=296032 dropped=12412 would_block=0 partial=0 connects=1 disconnects=1 gaps_sent=0 frames_lost=0 lingered=295998

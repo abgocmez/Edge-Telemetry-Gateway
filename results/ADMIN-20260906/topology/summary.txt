@@ -1,0 +1,11 @@
+topology  sources       gw sent   gw dropped delivered %
+queue     1              261856        80266       76.5%
+ring      1              168220       147000       53.4%
+queue     4              353210      1039927       25.4%
+ring      4              579507       709676       45.0%
+
+Rate is per source, so the four-source rows offer four times the load.
+
+Consumer-side latency is deliberately not compared here, for the reason
+in the comment above: under a deliberate stall, delivering more also
+means delivering older, and the two effects are not separable.
