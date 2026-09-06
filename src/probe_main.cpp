@@ -24,6 +24,7 @@
 // statement about the data it holds.
 
 #include <csignal>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <chrono>
@@ -170,6 +171,24 @@ int main(int argc, char** argv) {
   etg::GapTracker gaps;
 
   etg::Samples gw_latency;
+
+  // The once-a-second progress line needs a median, and the obvious way to get
+  // one is to ask Samples for it. That was wrong, and wrong in the worst way a
+  // measurement tool can be: Samples::compute copies and sorts everything it has
+  // retained, this loop is the loop being measured, and the retained set grows
+  // for the whole run. The stall it caused therefore grew with run length and
+  // landed entirely in the tail it was reporting. At 20 000 frames/s a twelve
+  // second run reported max 21 ms and a forty-five second run 124 ms, from the
+  // same pipeline under the same load - the difference was 240k against 900k
+  // samples being sorted once a second inside the read loop.
+  //
+  // So the live figure comes from a bounded window that is cleared each
+  // interval: fixed cost, no growth, and it reports the median of the last
+  // second rather than of the whole run, which is what a progress line should
+  // say anyway. Full percentiles are computed once, after the loop has stopped.
+  constexpr std::size_t kLiveWindow = 4096;
+  std::vector<std::int64_t> live;
+  live.reserve(kLiveWindow);
   etg::Samples e2e_latency;
 
   std::vector<etg::Frame> batch;
@@ -264,7 +283,12 @@ int main(int argc, char** argv) {
           }
 
           const std::uint64_t stamp = cross_machine ? f.t_kernel_ns : f.t_ingest_ns;
-          gw_latency.add(static_cast<std::int64_t>(now) - static_cast<std::int64_t>(stamp));
+          const std::int64_t delay =
+              static_cast<std::int64_t>(now) - static_cast<std::int64_t>(stamp);
+          gw_latency.add(delay);
+          if (live.size() < kLiveWindow) {
+            live.push_back(delay);
+          }
           if (measure_e2e) {
             e2e_latency.add(static_cast<std::int64_t>(now) -
                             static_cast<std::int64_t>(payload_timestamp(f)));
@@ -275,12 +299,21 @@ int main(int argc, char** argv) {
       const std::uint64_t now = etg::monotonic_ns();
       if (now >= next_report) {
         next_report = now + 1'000'000'000ULL;
-        const etg::Percentiles p = gw_latency.compute();
+        std::int64_t live_p50 = 0;
+        if (!live.empty()) {
+          // nth_element, not sort: the line needs one order statistic, and
+          // this is linear where a sort is not.
+          const std::size_t mid = live.size() / 2;
+          std::nth_element(live.begin(), live.begin() + static_cast<std::ptrdiff_t>(mid),
+                           live.end());
+          live_p50 = live[mid];
+        }
         std::fprintf(stderr, "%llu/s total=%llu lost=%llu gw_p50=%lldns\n",
                      static_cast<unsigned long long>(frames - last_frames),
                      static_cast<unsigned long long>(frames),
                      static_cast<unsigned long long>(gaps.total_lost()),
-                     static_cast<long long>(p.p50));
+                     static_cast<long long>(live_p50));
+        live.clear();
         last_frames = frames;
       }
     }
