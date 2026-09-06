@@ -135,6 +135,58 @@ that claim honest, [`scripts/parse-capture.py`](scripts/parse-capture.py)
 implements the format in another language from the specification alone, and CI
 runs it against every capture.
 
+## Measured on the Raspberry Pi
+
+Full method, limitations and raw logs in [results/](results/). Every chart below
+is drawn by `./scripts/plot.py` from the committed `summary.txt` files, so none
+of these numbers is typed in twice and re-measuring redraws them.
+
+### Latency against offered rate
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/latency-vs-rate-dark.svg">
+  <img alt="Log-log line chart of p50, p90, p99 and p99.9 latency at 2 000, 20 000 and 100 000 frames per second on a Raspberry Pi 3 B plus." src="docs/images/latency-vs-rate-light.svg">
+</picture>
+
+Four 500 kbit/s CAN buses produce on the order of 16 000 frames/s, so the middle
+point is already past the load this was built for. The rise from left to middle
+is the `ondemand` governor: a nearly idle board drops its clock and sleeps its
+cores, and every wake-up pays to come back.
+
+### What batching buys, and what it costs
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/batching-dark.svg">
+  <img alt="Two stacked panels sharing a logarithmic linger axis: consumer latency p50 and p99 above, write syscalls per second below." src="docs/images/batching-light.svg">
+</picture>
+
+Two panels rather than two y-axes on one frame, because the whole question is
+the size of the trade and a second scale is how that gets misrepresented.
+
+### Scheduling policy under contention
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/scheduling-dark.svg">
+  <img alt="Line chart across p50, p90, p99 and p99.9 for four scheduling arms: contended, idle, contended under SCHED_FIFO, and the same with mlockall." src="docs/images/scheduling-light.svg">
+</picture>
+
+One busy loop per core against the pipeline. `SCHED_FIFO` returns the whole
+distribution, including the tail; `mlockall` on top of it adds nothing
+measurable, because this pipeline allocates its ring once and then reuses it.
+
+### The measurement bug this project found in itself
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/correction-dark.svg">
+  <img alt="Dumbbell chart comparing every tail figure before and after the measurement fix, on a logarithmic scale." src="docs/images/correction-light.svg">
+</picture>
+
+The probe sorted its own growing sample buffer once a second, inside the read
+loop it was measuring. The stall grew with run length and landed in the tail it
+was reporting. Two published conclusions rested on those numbers and both were
+wrong; [results/](results/) names them as retracted rather than quietly
+restating them.
+
 ## Measurements so far
 
 From a GitHub Actions runner (x86_64, shared, no CPU pinning), 2000 frames/s
