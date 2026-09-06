@@ -26,7 +26,11 @@ std::int64_t nearest_rank(const std::vector<std::int64_t>& sorted, double p) {
 }  // namespace
 
 Samples::Samples(std::size_t capacity) : capacity_(capacity == 0 ? 1 : capacity) {
-  values_.reserve(capacity_ < (1U << 16U) ? capacity_ : (1U << 16U));
+  // Reserve the whole buffer, then write to every element so the pages are
+  // faulted in here rather than during the run, then empty it while keeping the
+  // capacity. add() can now never allocate.
+  values_.assign(capacity_, 0);
+  values_.clear();
 }
 
 void Samples::add(std::int64_t value) {

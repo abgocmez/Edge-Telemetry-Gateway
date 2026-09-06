@@ -182,7 +182,9 @@ class Egress {
   std::vector<std::byte> reply_buf_;
 
   mutable std::mutex rtt_mutex_;
-  Samples rtt_;
+  // Echo probes arrive a few times a second, not tens of thousands, so this
+  // asks for a fraction of the default rather than 8 MB per consumer.
+  Samples rtt_{1U << 14U};
 
   std::atomic<std::uint64_t> echoes_sent_{0};
   std::atomic<std::uint64_t> echoes_returned_{0};

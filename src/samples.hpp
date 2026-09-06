@@ -40,7 +40,19 @@ struct Percentiles {
 
 class Samples {
  public:
-  explicit Samples(std::size_t capacity = 8U << 20U);
+  // The buffer is allocated and touched in full at construction, never grown
+  // during a run. A std::vector that doubles as it fills charges some unlucky
+  // sample for copying the whole buffer plus first-touch faults on the new one,
+  // and in a measurement tool that cost lands in the tail being reported: it is
+  // what was left of etg-probe's inflated tail after the periodic sort was
+  // removed, showing up as isolated ~100 ms outliers each time the buffer
+  // stepped up a power of two. Past capacity, decimate() keeps the size fixed
+  // rather than reallocating.
+  //
+  // The default is a megabyte of samples, 8 MB, which at 20 000 frames/s is
+  // about a minute before decimation begins. Callers that sample far less often
+  // should ask for less: this is allocated per instance.
+  explicit Samples(std::size_t capacity = 1U << 20U);
 
   void add(std::int64_t value);
 

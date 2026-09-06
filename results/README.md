@@ -44,85 +44,132 @@ stopped draining, not that the pipeline stalled. The gateway's own counters in
 `dropped` is the consumer's queue or ring cells being overwritten, and
 `lingered` is batches that waited to coalesce on purpose.
 
+## A correction, and what it cost
+
+Every tail figure below was measured twice. The first set was wrong, and the
+reason is worth more than the numbers.
+
+`etg-probe` printed a progress line once a second, and to get the median for it
+it called `Samples::compute`, which copies and sorts everything retained so far.
+That call sat in the read loop being measured, and the retained set grew for the
+whole run. So the instrument stalled itself, for longer the longer it ran, and
+every stall landed in the tail it was reporting. At 20 000 frames/s a twelve
+second run sorted 240 000 samples once a second and reported max 21 ms; a
+forty-five second run sorted 900 000 and reported 124 ms, from the same pipeline
+under the same load.
+
+It survived this long because nothing ran long enough to make it obvious. It
+surfaced when the thermal trace used 45-second blocks and returned p99 of 86 ms
+where the scheduling experiment had 2.4 ms at the same rate on the same board.
+Before changing anything it was isolated by elimination: not temperature (the
+first block was cool and already showed it), not the governor (pinning
+`performance` changed nothing), not scheduling, not paging, and not a backlog --
+delivery held at exactly 20 000/s throughout and the median frame was never
+late. Duration was the only variable that moved it.
+
+With the fix, at 20 000/s over 45 seconds: p99 73 292 µs to 228 µs, p99.9
+109 057 µs to 278 µs. Twelve-second and forty-five-second runs now agree, which
+is the property that was missing.
+
+Medians were never affected. Two conclusions drawn from the bad tails were, and
+both are retracted where they appear below: that batching improves the tail on
+this hardware, and that `SCHED_FIFO` cannot help the extreme tail.
+
 ## Findings
 
-Raspberry Pi 3 B+, aarch64, GCC 14.2, governor `performance`, one consumer,
+Raspberry Pi 3 B+, aarch64, GCC 14.2, governor `ondemand`, one consumer,
 synthetic source. Full provenance in each experiment's `env.txt`.
 
-### The median is flat; only the tail moves
+### The median is flat until the pipeline runs out of room
 
-| rate | p50 | p99 | p99.9 |
-|---|---|---|---|
-| 2 000/s | 64.6 µs | 74.1 µs | 172.6 µs |
-| 20 000/s | 61.4 µs | 428.4 µs | 12.6 ms |
-| 100 000/s | 68.5 µs | 77.4 ms | 110.8 ms |
+| rate | p50 | p90 | p99 | p99.9 | max |
+|---|---|---|---|---|---|
+| 2 000/s | 114.8 µs | 125.3 µs | 144.3 µs | 214.5 µs | 4 608.8 µs |
+| 20 000/s | 65.9 µs | 72.2 µs | 118.2 µs | 163.0 µs | 2 835.3 µs |
+| 100 000/s | 61.7 µs | 79.6 µs | 1 690.9 µs | 4 586.1 µs | 11 310.9 µs |
 
-Across a fiftyfold change in offered rate the median moves by 7 µs. What
-degrades is the tail, and it degrades by five orders of magnitude. Both
-topologies behave the same way here.
+Both topologies behave the same way here, within noise.
 
-Four 500 kbit/s CAN buses produce on the order of 16 000 frames/s, so the
-middle row is already well past anything this gateway would see in the role it
-was built for.
+The 2 000/s row is slower than the 20 000/s row at every percentile, which looks
+backwards and is not. The governor is `ondemand`: at 2 000 frames/s the board is
+nearly idle, so it drops the clock and lets cores enter idle states, and every
+wake-up pays to come back. Ten times the work arrives *sooner* because the
+machine is already awake. The same effect shows up again under contention in the
+scheduling experiment, where a loaded pipeline beats an idle one.
 
-### Batching is not a monotonic trade on this hardware
+Only at 100 000/s does a real tail appear, and there it is queueing: the board
+is close enough to its service capacity that a burst builds a backlog and the
+frames behind it wait for the drain.
+
+Four 500 kbit/s CAN buses produce on the order of 16 000 frames/s, so the middle
+row is already past anything this gateway would see in the role it was built
+for.
+
+### Batching trades latency for syscalls, monotonically
 
 | linger | frames/batch | p50 | p99 | write syscalls/s |
 |---|---|---|---|---|
-| 0 | 1.0 | 62.0 µs | **1407.0 µs** | 20 000 |
-| 100 µs | 4.1 | 123.7 µs | **376.8 µs** | 4 878 |
-| 250 µs | 7.1 | 214.2 µs | 401.0 µs | 2 817 |
-| 1000 µs | 22.7 | 603.9 µs | 1138.4 µs | 881 |
-| 5000 µs | 103.7 | 2616.0 µs | 5104.5 µs | 193 |
+| 0 | 1.1 | 72.5 µs | 121.8 µs | 18 182 |
+| 100 µs | 3.2 | 133.6 µs | 233.6 µs | 6 250 |
+| 250 µs | 6.2 | 229.5 µs | 368.7 µs | 3 226 |
+| 500 µs | 11.5 | 340.3 µs | 677.2 µs | 1 739 |
+| 1000 µs | 21.8 | 593.7 µs | 1 143.6 µs | 917 |
+| 2500 µs | 52.9 | 1 365.7 µs | 2 652.0 µs | 378 |
+| 5000 µs | 104.0 | 2 678.0 µs | 5 177.6 µs | 192 |
 
-The expected shape is that waiting to coalesce buys throughput and costs tail
-latency. On the development machine it does exactly that, monotonically: p99
-rises from 107 µs at linger 0 through 246 µs, 378 µs and upward.
+Waiting to coalesce buys syscalls and costs latency, in a straight line, at both
+percentiles. A hundredfold reduction in write syscalls costs about twenty times
+the p50.
 
-On the Pi the curve turns over. A linger of 100 µs makes the tail **3.7x
-better**, not worse. Twenty thousand write syscalls a second is itself the
-dominant source of tail latency on four 1.4 GHz cores, and cutting it fourfold
-more than pays for the delay introduced. The optimum here is somewhere around
-100–250 µs; on x86 it is zero.
-
-This is the clearest argument in the project for measuring on the target rather
-than on the machine the code was written on. The same sweep on the development
-machine would have supported the opposite recommendation.
+**This retracts a previous finding.** An earlier version of this file reported
+that on the Pi the curve turned over -- that a 100 µs linger made p99 3.7 times
+*better* than no linger, and that the optimum was 100-250 µs rather than zero.
+That was the probe's own stall: at linger 0 the probe sees 20 000 individual
+frames a second and accumulates samples fastest, so the periodic sort that
+polluted the tail was largest exactly where the claim needed it to be. There is
+no turnover. Zero is the lowest-latency setting on this board as it is on any
+other, and the reason to raise it is syscall rate, not tail latency.
 
 ### Under overload, more loss means lower latency
 
 | offered | delivered | lost | loss | p99 |
 |---|---|---|---|---|
-| 5 000/s | 48 760 | 0 | 0.00% | 1227 ms |
-| 20 000/s | 108 179 | 62 185 | 36.50% | 2223 ms |
-| 50 000/s | 130 612 | 349 764 | 72.81% | 1367 ms |
-| 200 000/s | 359 964 | 1 634 792 | 81.95% | **635 ms** |
+| 5 000/s | 53 233 | 0 | 0.00% | 2 297 ms |
+| 20 000/s | 107 658 | 109 667 | 50.46% | 1 784 ms |
+| 50 000/s | 173 597 | 391 894 | 69.30% | 1 213 ms |
+| 100 000/s | 236 245 | 922 444 | 79.61% | 966 ms |
+| 200 000/s | 392 498 | 1 960 773 | 83.32% | **697 ms** |
 
-Loss rises with load, as expected. Latency does not: it peaks at 20 000/s and
-then *falls* as loss increases. That is drop-oldest working as designed — the
-more aggressively stale frames are discarded, the younger the surviving ones
-are when they arrive. A pipeline that buffered instead of dropping would
-deliver everything, eventually, and every frame would be worthless by then.
+The consumer stalls 300 µs per batch throughout, so this is what the pipeline
+does when a consumer is definitively too slow, not how fast it can go.
 
-The 5 000/s row is the one to read carefully: zero loss and 1.2 seconds of
-latency. Nothing was dropped because an 8192-deep buffer at that rate holds
-1.6 seconds of traffic, so the delay is the buffer, not the pipeline.
+Loss rises with load, as expected. Latency does not: it falls monotonically as
+loss rises. That is drop-oldest working as designed -- the more aggressively
+stale frames are discarded, the younger the survivors are when they arrive. A
+pipeline that buffered instead of dropping would deliver everything, eventually,
+and every frame would be worthless by then.
 
-### The topologies differ only when there is more than one bus
+The 5 000/s row is the one to read carefully: zero loss and 2.3 seconds of
+latency. Nothing was dropped because an 8192-deep buffer at that rate holds 1.6
+seconds of traffic, so the delay is the buffer, not the pipeline.
+
+### The topologies differ when there is more than one bus
 
 | topology | sources | sent | dropped | delivered |
 |---|---|---|---|---|
-| queue | 1 | 147 733 | 144 334 | 50.6% |
-| ring | 1 | 145 212 | 129 886 | 52.8% |
-| queue | 4 | 265 645 | 927 012 | **22.3%** |
-| ring | 4 | 468 905 | 621 642 | **43.0%** |
+| queue | 1 | 156 204 | 185 696 | 45.7% |
+| ring | 1 | 167 990 | 147 182 | 53.3% |
+| queue | 4 | 388 480 | 1 004 600 | **27.9%** |
+| ring | 4 | 659 082 | 621 949 | **51.4%** |
 
-With one source the two are indistinguishable, which is the honest result: the
-ring's machinery buys nothing when there is one producer and no contention.
-With four, the ring delivers nearly twice as much of the same offered load.
+With four sources the ring delivers nearly twice as much of the same offered
+load. With one it is ahead by rather less, and that margin is the least
+trustworthy number in this file: a single run of a saturated pipeline, where
+what gets dropped depends on scheduling accidents. The four-source gap is large
+enough and mechanical enough to stand on.
 
 Topology A is not slow by accident. Order in a queue is push order, so it cannot
-spread ingest across threads without handing a consumer sequences out of order —
+spread ingest across threads without handing a consumer sequences out of order --
 its single fan-out thread is forced by the ordering guarantee, and it then has
 to copy every frame once per consumer. The ring takes its order from the cell
 position and needs neither.
@@ -224,36 +271,44 @@ periodically, the consumer returns it unchanged, and the gateway times it with
 its own clock from send to return — there is no second clock to disagree with.
 
 Gateway on the Pi, consumer on the development machine, 20 000 frames/s over
-wired Ethernet, 30 seconds:
+wired Ethernet, 35 seconds, 175 probes sent and 175 returned:
 
 | | idle side-channel | in-band probe |
 |---|---|---|
-| RTT p50 | 518 µs | **524.6 µs** |
-| RTT p99 | 2294 µs | **25 460 µs** |
-| RTT max | 12 219 µs | **72 182 µs** |
+| RTT p50 | 518 µs | **496.1 µs** |
+| RTT p99 | 2 294 µs | **655.7 µs** |
+| RTT max | 12 219 µs | **6 135.0 µs** |
 
 The two mechanisms share no code — one is a standalone Python TCP echo
 (`link-ceiling.py`), the other a C++ record travelling through the whole egress
-path — and their medians agree to within six microseconds. That agreement is
-the cross-check that neither is measuring something else.
+path, the same batching and the same socket as the frames around it — and their
+medians agree to within 4%. That agreement is the cross-check that neither is
+measuring something else.
 
-Their tails differ by a factor of eleven, and that difference is the finding. A
-probe on an idle socket measures the network. A probe queued behind real traffic,
-through the same batching and the same socket buffer, measures what a frame
-actually experiences. Reporting the first as if it were the second would
-understate the tail by an order of magnitude.
-
-The run itself: 608 174 frames delivered in 30 seconds at 20 272/s, zero loss,
-zero silent jumps, zero protocol errors, and 1414 of 1452 probes returned. The
-38 that did not were dropped by the consumer rather than waited on — answering a
-measurement probe must not block a consumer's read loop, because that would
-distort the thing being measured.
-
-**One-way p50 is therefore about 262 µs**, halved from the round trip, assuming
+**One-way p50 is therefore about 248 µs**, halved from the round trip, assuming
 a symmetric path and including the consumer's turnaround. The gateway's own
 contribution — 60–70 µs, measured locally in a single clock domain — is a small
 part of it. The two halves are measured separately and added, which is
 defensible; subtracting two clocks that disagree by 1.19 seconds is not.
+
+### What the tails do not say
+
+An earlier version of this section reported the in-band p99 as 25 460 µs against
+the side-channel's 2 294 µs and made an argument out of the elevenfold gap: that
+an idle probe measures the network while an in-band one measures what a frame
+really experiences. The gap was the probe stalling itself (see the correction at
+the top of this file), and 38 probes were "dropped by the consumer" for the same
+reason. With the instrument fixed, none are dropped and the in-band tail is
+*lower* than the side-channel's.
+
+The argument was appealing and it fit. It is worth recording that it was wrong,
+because the number that supported it was produced by the thing being measured.
+
+The remaining difference runs the other way and is not interesting: the
+side-channel's responder is a Python script and the in-band one is the C++
+consumer, so their tails describe two different responders rather than two
+different paths. The medians agree because the network dominates both; the tails
+differ because the software does not.
 
 ## Does SCHED_FIFO help a pipeline the way it helped a periodic loop?
 
@@ -265,66 +320,47 @@ assuming in either direction.
 
 Four arms at 20 000 frames/s on the ring, `./scripts/measure.sh sched`. The three
 loaded arms run one busy loop per core at ordinary priority; without contention
-every policy looks identical and the experiment answers nothing. Median of three
-runs per percentile, microseconds:
+every policy looks identical and the experiment answers nothing. Microseconds:
 
 | arm | p50 | p90 | p99 | p99.9 | max |
 |---|---|---|---|---|---|
-| idle, `SCHED_OTHER` | 126.5 | 223.4 | 2 439.8 | 18 022.8 | 24 105.7 |
-| loaded, `SCHED_OTHER` | 250.9 | 3 356.5 | **24 234.5** | 48 825.7 | 57 407.1 |
-| loaded, `SCHED_FIFO` 20 | 124.1 | 178.1 | **2 419.2** | 18 193.8 | 23 952.8 |
-| loaded, `SCHED_FIFO` + `mlockall` | 124.1 | 220.5 | 2 601.1 | 18 144.0 | 24 109.5 |
+| idle, `SCHED_OTHER` | 133.7 | 187.7 | 229.5 | 290.2 | 3 134.3 |
+| loaded, `SCHED_OTHER` | 206.6 | 420.9 | **5 087.4** | **8 671.9** | 12 126.5 |
+| loaded, `SCHED_FIFO` 20 | 124.2 | 176.8 | **226.2** | **245.3** | 2 855.8 |
+| loaded, `SCHED_FIFO` + `mlockall` | 124.2 | 177.2 | 226.8 | 248.9 | 3 788.0 |
 
-No frames were lost in any arm of any run.
+No frames were lost in any arm.
 
-Contention costs roughly 10x at p99. `SCHED_FIFO` gives all of it back and
-restores p50 and p90 outright — a loaded pipeline at real-time priority has a
-*lower* p90 than an idle one at ordinary priority, 178 µs against 223 µs. That
-inversion is not noise and not a win: the governor is `ondemand`, so on an idle
-board it drops the clock and lets cores enter idle states, and every wake-up then
-pays to come back. The busy loops hold the frequency up. Load helps the median
-exactly because the board is otherwise busy standing down.
+Contention costs 22x at p99 and 30x at p99.9. `SCHED_FIFO` gives all of it back,
+across the whole distribution rather than just the middle of it: every
+percentile under contention at real-time priority is at or below the idle
+figure at ordinary priority.
 
-### What it does not fix, and why
+Beating the idle arm is not a paradox. The governor is `ondemand`, so an idle
+board drops its clock and sleeps its cores, and every wake-up pays to come back.
+The busy loops hold the frequency up. It is the same effect that makes 2 000
+frames/s slower than 20 000 in the rate sweep above.
 
-p99.9 and max do not move at all: about 18 ms and 24 ms in every arm, contended
-or not, promoted or not.
+`mlockall` adds nothing measurable on top. That is worth stating rather than
+quietly dropping: the supervisor used it, this asks whether it matters here, and
+the answer on this workload is no. It is a real answer, not a null result --
+locking memory protects against faults this pipeline does not take, because it
+allocates its ring once at startup and then reuses it.
 
-The first hypothesis was paging. Nothing here called `mlockall`, the supervisor
-did, and an RT thread that takes a page fault waits for the kernel whatever its
-priority. The fourth arm exists to test that, and it refutes it — `mlockall`
-changed p99.9 by less than the run-to-run noise, three times over.
+**This replaces an earlier conclusion.** A previous version of this file reported
+that `SCHED_FIFO` recovered p50 through p99 but left p99.9 and max untouched at
+about 18 ms and 24 ms, and reasoned at length about what could produce a tail
+that priority could not reach. Nothing did: that tail was the probe sorting its
+own sample buffer inside the loop it was measuring, and no scheduling policy
+makes a sort faster. Once the instrument stopped stalling, the tail it was
+protecting turned out not to exist.
 
-The rate sweep in the first table above answers it instead. The same extreme
-tail is not a fixed cost at all:
-
-| offered rate | p99.9 | max |
-|---|---|---|
-| 2 000/s | 172.6 µs | 915.6 µs |
-| 20 000/s | 12 644.9 µs | 17 741.6 µs |
-| 100 000/s | 110 755.7 µs | 116 617.2 µs |
-
-It scales with offered load, and it is the same in both topologies, so it is
-neither the scheduler nor the ring. At 20 000 frames/s this board is close
-enough to its service capacity that a transient burst builds a backlog, and the
-frames behind it wait for the backlog to drain. Priority decides who runs first;
-it cannot create throughput that is not there.
-
-So the honest summary is narrower than the supervisor's headline. `SCHED_FIFO`
-protects the body of the distribution from *competing work*, which is what it is
-for. It does nothing about a queue you built yourself by offering more than the
-machine can serve, and no scheduling policy will.
-
-### The more useful finding is the spread
-
-Across all six runs of the real-time arm, p50 landed between 124.0 and 124.1 µs
-and p99 between 2 311 and 2 771 µs. p90 was 176.3–178.1 µs in five of the six
-and 220.7 µs in the sixth. The contended ordinary arm, over the same six runs,
-produced p90 of 327.8, 2 397.4, 3 418.2, 3 361.6, 3 356.5 and 3 297.4 µs.
-
-For a failsafe runtime that spread is arguably the point. A tail ten times lower
-is worth having; a tail that is the same number twice is what makes a deadline
-something you can argue for.
+The lesson is the one worth keeping. The wrong conclusion was reached carefully
+-- three repetitions, a stated hypothesis, an experiment built to test it, and
+`mlockall` correctly refuted. Every step was sound and the answer was still
+wrong, because the instrument was inside the measurement. The rate sweep had
+been sitting in this same file the whole time showing a tail that scaled with
+sample count, and it was read as evidence of queueing.
 
 ### Reading these numbers
 
@@ -340,4 +376,4 @@ something you can argue for.
   confining several ingest and egress threads to one core would serialise work
   meant to overlap.
 - `throttled=0x80000` (`soft-temp-limit-occurred`) is latched since boot, not a
-  statement about these runs; the die was at 54.8 °C.
+  statement about these runs; the die was at 53.7 °C.

@@ -169,21 +169,25 @@ consumer's host had never completed a single NTP exchange, and the two
 on one machine, from send to return — there is nothing to agree about.
 
 It travels **in-band**, through the same batching and the same socket as the
-frames around it, and that is not incidental. Measured across a LAN at 20 000
-frames/s against an idle side-channel doing the same thing:
+frames around it, so what it measures is what a frame queued behind real traffic
+experiences rather than what an idle socket would report. Measured across a LAN
+at 20 000 frames/s against an independent side-channel doing the same thing over
+the same link:
 
 | | idle channel | in-band |
 |---|---|---|
-| RTT p50 | 518 µs | 524.6 µs |
-| RTT p99 | 2294 µs | 25 460 µs |
+| RTT p50 | 518 µs | 496.1 µs |
+| RTT p99 | 2 294 µs | 655.7 µs |
 
-The medians agree to within six microseconds, which is the cross-check. The
-tails differ elevenfold, which is the reason to bother: a probe on an idle
-socket measures the network, while a probe queued behind real traffic measures
-what a frame actually experiences.
+The medians agree to within 4%, which is the cross-check: two mechanisms sharing
+no code arrive at the same figure, so neither is measuring something else. The
+tails are not comparable — the side-channel's responder is a Python script and
+the in-band one is the C++ consumer, so they describe two responders rather than
+two paths.
 
-Two caveats that are stated rather than corrected for: halving assumes the path
-is symmetric, and the consumer's turnaround time is inside the figure.
+Three caveats stated rather than corrected for: halving assumes the path is
+symmetric, the consumer's turnaround is inside the figure, and a probe answered
+on the consumer's read loop measures that loop's health as well as the link's.
 
 ## Why version 2 exists
 
