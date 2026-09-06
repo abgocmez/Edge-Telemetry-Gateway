@@ -50,24 +50,29 @@ void Samples::decimate() {
   stride_ *= 2;
 }
 
-Percentiles Samples::compute() const {
+Percentiles percentiles_of(std::vector<std::int64_t>& values) {
   Percentiles p;
-  p.count = total_;
-  if (values_.empty()) {
+  if (values.empty()) {
     return p;
   }
+  std::sort(values.begin(), values.end());
 
+  p.count = values.size();
+  p.min = values.front();
+  p.max = values.back();
+  p.mean = static_cast<double>(std::accumulate(values.begin(), values.end(), std::int64_t{0})) /
+           static_cast<double>(values.size());
+  p.p50 = nearest_rank(values, 0.50);
+  p.p90 = nearest_rank(values, 0.90);
+  p.p99 = nearest_rank(values, 0.99);
+  p.p999 = nearest_rank(values, 0.999);
+  return p;
+}
+
+Percentiles Samples::compute() const {
   std::vector<std::int64_t> sorted = values_;
-  std::sort(sorted.begin(), sorted.end());
-
-  p.min = sorted.front();
-  p.max = sorted.back();
-  p.mean = static_cast<double>(std::accumulate(sorted.begin(), sorted.end(), std::int64_t{0})) /
-           static_cast<double>(sorted.size());
-  p.p50 = nearest_rank(sorted, 0.50);
-  p.p90 = nearest_rank(sorted, 0.90);
-  p.p99 = nearest_rank(sorted, 0.99);
-  p.p999 = nearest_rank(sorted, 0.999);
+  Percentiles p = percentiles_of(sorted);
+  p.count = total_;  // samples observed, not samples retained
   return p;
 }
 

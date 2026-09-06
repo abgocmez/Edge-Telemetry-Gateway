@@ -77,30 +77,18 @@ class RollingLatency {
     }
   }
 
-  [[nodiscard]] etg::Percentiles compute() const {
-    etg::Percentiles p;
-    if (samples_.empty()) {
-      return p;
-    }
+  // Just the values, so a caller can copy them under the lock and pay for the
+  // sort after releasing it. The frame loop needs that lock, and sorting tens of
+  // thousands of samples while holding it stalls the reader twice a second -
+  // which is precisely the mistake etg-probe was making, where it inflated the
+  // very tail it was reporting.
+  [[nodiscard]] std::vector<std::int64_t> values() const {
     std::vector<std::int64_t> v;
     v.reserve(samples_.size());
     for (const Sample& s : samples_) {
       v.push_back(s.v);
     }
-    std::sort(v.begin(), v.end());
-
-    const auto at = [&v](double q) {
-      auto i = static_cast<std::size_t>(q * static_cast<double>(v.size()));
-      return v[i >= v.size() ? v.size() - 1 : i];
-    };
-    p.count = v.size();
-    p.min = v.front();
-    p.max = v.back();
-    p.p50 = at(0.50);
-    p.p90 = at(0.90);
-    p.p99 = at(0.99);
-    p.p999 = at(0.999);
-    return p;
+    return v;
   }
 
   // How much wall time the retained samples actually span, so the page can say
@@ -167,8 +155,21 @@ std::string json_stats(State& st, std::uint16_t port) {
   std::string out;
   out.reserve(16384);
 
+  // Copy the samples under the lock, sort them after releasing it, then take the
+  // lock again for the rest. The two halves therefore come from moments a few
+  // hundred microseconds apart, which no reader of a page that refreshes twice a
+  // second can tell - and it keeps an O(n log n) sort out of a critical section
+  // the frame loop needs on every batch.
+  std::vector<std::int64_t> lat_values;
+  double lat_span = 0.0;
+  {
+    const std::lock_guard<std::mutex> snapshot(st.mutex);
+    lat_values = st.latency.values();
+    lat_span = st.latency.span_s();
+  }
+  const etg::Percentiles p = etg::percentiles_of(lat_values);
+
   std::lock_guard<std::mutex> lock(st.mutex);
-  const etg::Percentiles p = st.latency.compute();
   const std::uint64_t now = etg::monotonic_ns();
   const double uptime = static_cast<double>(now - st.started_ns) / 1e9;
 
@@ -196,7 +197,7 @@ std::string json_stats(State& st, std::uint16_t port) {
                 "\"p99\":%lld,\"p999\":%lld,\"max\":%lld},",
                 static_cast<unsigned long long>(p.count),
                 static_cast<unsigned long long>(st.off_domain),
-                st.off_domain > st.frames / 2 ? "false" : "true", st.latency.span_s(),
+                st.off_domain > st.frames / 2 ? "false" : "true", lat_span,
                 static_cast<long long>(p.min),
                 static_cast<long long>(p.p50), static_cast<long long>(p.p90),
                 static_cast<long long>(p.p99), static_cast<long long>(p.p999),

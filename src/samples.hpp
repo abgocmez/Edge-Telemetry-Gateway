@@ -32,6 +32,12 @@ struct Percentiles {
 // ceil(p * n) - 1 of the sorted retained samples. Stated because a reader
 // comparing against a tool that interpolates will otherwise see a small
 // disagreement and not know which is which.
+// Percentiles over a caller-owned vector, which this sorts in place. Split out
+// so a caller holding a lock can copy the values, release the lock, and only
+// then pay for the sort - see the note in etg-view. Same nearest-rank rule as
+// Samples::compute, so the two agree.
+[[nodiscard]] Percentiles percentiles_of(std::vector<std::int64_t>& values);
+
 class Samples {
  public:
   explicit Samples(std::size_t capacity = 8U << 20U);
